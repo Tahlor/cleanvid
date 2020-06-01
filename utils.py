@@ -9,26 +9,52 @@ from google.cloud.speech_v1p1beta1 import enums
 from google.api_core.operation import from_gapic
 from google.cloud.speech_v1p1beta1.proto import cloud_speech_pb2
 from datetime import datetime
-
 from time import sleep
 import json
 import os
+from easydict import EasyDict as edict
 
+def process_config(path="./config"):
+    from configparser import ConfigParser
+    config = ConfigParser()
+    config.read(path)
+    my_config = {s: dict(config.items(s)) for s in config.sections()}
+    for s in config.sections():
+        my_config.update(config.items(s))
+    return edict(my_config)
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "./credentials/Speech to Text-0bc76bdcf21a.json"
+def create_mute_list(time_list):
+    """
 
-class google_api:
+    Args:
+        subs (tuple): a list of tuples (start,end)
+
+    Returns:
+
+    """
+
+    muteTimeList = []
+    for timePair in time_list:
+        lineStart = timePair[0]
+        lineEnd = timePair[1]
+        muteTimeList.append("volume=enable='between(t," + format(lineStart, '.3f') + "," + format(lineEnd, '.3f') + ")':volume=0")
+    return muteTimeList
+
+class google_speech_api:
 
     def __init__(self,
+                 credential_path,
                  codec="flac",
                  sample_rate=44100,
-                 require_confirmation=True
+                 require_api_confirmation=True,
+                 **kwargs
                  ):
         self.swears = parse_swears()
         self.codec = codec
         self.sample_rate = sample_rate
         self.speech_client = speech_v1.SpeechClient()
-        self.require_confirmation = require_confirmation
+        self.require_api_confirmation = require_api_confirmation
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
 
     def serialize_operation(self, future, name):
         operation = future.operation
@@ -140,7 +166,7 @@ class google_api:
         audio = {"uri": storage_uri}
 
         # Use confrimation
-        if self.require_confirmation:
+        if self.require_api_confirmation:
             confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
             if confirmation.lower() != "y":
                 return
@@ -185,20 +211,24 @@ def parse_swears(swears="swears.txt"):
 
 def test_load_response():
     # Load old response
-    ga = google_api()
-    response = ga.load_response("Richard.Jewell.2019.720p00")
+    config = process_config()
+    ga = google_speech_api(**config)
+    response = ga.load_response(config.response_path)
     mute_list, transcript = ga.create_mute_list_from_response(response)
     print(response.results)
     print(mute_list)
 
 def test_resume_op():
-    ga = google_api()
-    ga.resume_operation("Richard.Jewell.2019.720p000_2020-06-01 00:40:30")
+    config = process_config()
+    ga = google_speech_api(**config)
+    ga.resume_operation(config.load_operation_path)
 
 def test():
-    ga = google_api()
-    mute_list, transcript = ga.process('gs://remove_profanity_from_movie_project/Richard.Jewell.2019.720p00.flac')
+    config = process_config()
+    ga = google_speech_api(**config)
+    mute_list, transcript = ga.process(config.uri)
 
 if __name__=="__main__":
-    ga = google_api()
-    ga.resume_operation("Richard.Jewell.2019.720p000_2020-06-01 00:40:30")
+    config = process_config()
+    ga = google_speech_api(**config)
+    ga.resume_operation(config.operation_path)

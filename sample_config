@@ -1,0 +1,5 @@
+# ffmpeg location
+ffmpeg_path = "/usr/bin/ffmpeg"
+
+# credentials
+credentials = "./credentials/Speech to Text-0bc76bdcf21a.json"

@@ -4,6 +4,7 @@ venv/
 .idea/
 credentials/
 vids/
+config
 
 *.pyc
 *.srt
