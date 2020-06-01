@@ -1,3 +1,10 @@
+data/
+temp/
+venv/
+.idea/
+credentials/
+vids/
+
 *.pyc
 *.srt
 *.mp4

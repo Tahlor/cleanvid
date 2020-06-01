@@ -22,6 +22,7 @@ def GetSubtitles(vidFileSpec, srtLanguage):
     subFileSpec = subFileParts[0] + "." + str(Language(srtLanguage)) + ".srt";
     if not os.path.isfile(subFileSpec):
       video = Video.fromname(vidFileSpec)
+      print("Downloading subtitles...")
       bestSubtitles = download_best_subtitles([video], {Language(srtLanguage)})
       savedSub = save_subtitles(video, [bestSubtitles[video][0]])
 
@@ -124,6 +125,8 @@ class VidCleaner(object):
 
 #################################################################################
 if __name__ == '__main__':
+  import shlex
+  command = shlex.split("-i '/media/taylor/Data/Linux/Github/personal_projects/cleanvid/Donnie Darko[2001] (DVD).avi' -o OUTPUT.avi")
   parser = argparse.ArgumentParser()
   parser.add_argument('-s', '--subs',   help='.srt subtitle file (will attempt auto-download if unspecified)', metavar='<srt>')
   parser.add_argument('-i', '--input',  help='input video file', metavar='<input video>')
@@ -133,7 +136,8 @@ if __name__ == '__main__':
                                         default=os.path.join(__location__, 'swears.txt'), \
                                         metavar='<profanity file>')
   parser.add_argument('-l', '--lang',   help='language for srt download (default is "eng")', default='eng', metavar='<language>')
-  args = parser.parse_args()
+
+  args = parser.parse_args(command)
 
   inFile = args.input
   outFile = args.output
