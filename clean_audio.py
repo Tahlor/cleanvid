@@ -131,7 +131,7 @@ class CleanProfanity:
         vid = Path(main_path)
         destination = self.upload_to_cloud(vid, str(Path(vid.parent.name) / vid.name), overwrite=overwrite)
         uri = f"gs://remove_profanity_from_movie_project/{destination}"
-        proto_mute_list, transcript = self.speech_api.process(uri, name=name)
+        proto_mute_list, transcript = self.speech_api.process_speech(uri, name=name)
 
         final_mute_list = utils.create_mute_list(proto_mute_list)
 
