@@ -4,10 +4,17 @@ from pathlib import Path
 from google.protobuf import json_format
 from google.longrunning import operations_pb2
 from google.api_core.operation import from_gapic
+
+# Speech API
 from google.cloud import speech_v1p1beta1 as speech_v1
-from google.cloud.speech_v1p1beta1 import enums
-from google.api_core.operation import from_gapic
 from google.cloud.speech_v1p1beta1.proto import cloud_speech_pb2
+
+# Video Intelligence API
+from google.cloud.videointelligence_v1p3beta1.proto import video_intelligence_pb2
+from google.cloud import videointelligence_v1p3beta1 as video_v1
+
+
+
 from datetime import datetime
 from time import sleep
 import json
@@ -47,14 +54,29 @@ class google_speech_api:
                  codec="flac",
                  sample_rate=44100,
                  require_api_confirmation=True,
+                 api="speech", # speech, video
                  **kwargs
                  ):
         self.swears = parse_swears()
         self.codec = codec
         self.sample_rate = sample_rate
-        self.speech_client = speech_v1.SpeechClient()
+        self.api = api
+        if api=="speech":
+            self.speech_client = speech_v1.SpeechClient()
+        elif api=="video":
+            self.video_client = video_v1.VideoIntelligenceServiceClient()
+
         self.require_api_confirmation = require_api_confirmation
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
+
+        self.speech_config = {
+            "enable_word_time_offsets": True,
+            "language_code": "en-US",
+            "model": "video",  # default OR video, video is more expensive
+            "max_alternatives": 2,
+            "profanity_filter": False
+        }
+
 
     def serialize_operation(self, future, name):
         operation = future.operation
@@ -108,12 +130,15 @@ class google_speech_api:
             traceback.print_exc()
         return response
 
-    def process(self, storage_uri, name=None, response=None):
+    def process_speech(self, storage_uri, name=None, response=None):
         if name is None:
             name = Path(storage_uri).stem
 
         if response is None:
-            operation = self.create_operation(storage_uri=storage_uri, )
+            if self.api == "speech":
+                operation = self.create_speech_operation(storage_uri=storage_uri, )
+            elif self.api == "video":
+                operation = self.create_video_speech_operation(storage_uri=storage_uri, )
             self.serialize_operation(operation, name=name)
             response = self.get_response(operation, name=name)
         else:
@@ -124,8 +149,34 @@ class google_speech_api:
                     Path(f"./data/mute_lists/{name}.pickle").open("wb"))
         return mute_list, transcript
 
+    def process_adult_content(self, storage_uri, name=None, response=None):
+        if name is None:
+            name = Path(storage_uri).stem
 
-    def create_operation(self, storage_uri, name=None):
+        if response is None:
+            operation = self.detect_explicit_content(storage_uri=storage_uri)
+            self.serialize_operation(operation, name=name)
+            response = self.get_response(operation, name=name)
+        else:
+            response = self.load_response(response)
+
+        skip_list = self.create_skip_list(response)
+        pickle.dump(skip_list,
+                    Path(f"./data/mute_lists/{name}.pickle").open("wb"))
+        return skip_list
+
+    def create_skip_list(self, response):
+        """ Create a list of tuples
+
+        Args:
+            response: A video response object
+
+        Returns:
+            list of tuples: [[start_skip, end_skip], ...]
+        """
+        pass
+
+    def create_speech_operation(self, storage_uri, name=None):
         """
         Print start and end time of each word spoken in audio file from Cloud Storage
         https://cloud.google.com/speech-to-text/docs/basics#select-model
@@ -138,34 +189,20 @@ class google_speech_api:
 
         # When enabled, the first result returned by the API will include a list
         # of words and the start and end time offsets (timestamps) for those words.
-        enable_word_time_offsets = True
-
         # The language of the supplied audio
-        language_code = "en-US"
 
+        config = self.speech_config.copy()
         if self.codec == "flac":
-            config = {
-                "enable_word_time_offsets": enable_word_time_offsets,
-                "language_code": language_code,
-                "encoding": enums.RecognitionConfig.AudioEncoding.FLAC,
-                "model": "video", # default OR video, video is more expensive
-                "max_alternatives":2,
-                "profanity_filter": False
-            }
+            config.update({"encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.FLAC})
         elif self.codec == "mp3":
-            config = {
-                "enable_word_time_offsets": enable_word_time_offsets,
-                "language_code": language_code,
+            config.update({
                 "sample_rate_hertz": self.sample_rate,
-                "encoding": enums.RecognitionConfig.AudioEncoding.MP3,
-                "model": "video",
-                "max_alternatives": 2,
-                "profanity_filter": False
-            }
+                "encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.MP3,
+                })
 
         audio = {"uri": storage_uri}
 
-        # Use confrimation
+        # Use confirmation
         if self.require_api_confirmation:
             confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
             if confirmation.lower() != "y":
@@ -201,8 +238,43 @@ class google_speech_api:
     def load_response(self, name):
         json_path = f"./data/google_api_responses/{name}.response"
         response_json = json.load(Path(json_path).open("r"))
-        response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
+        if self.api=="speech":
+            response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
+        elif self.api=="video":
+            response = json_format.Parse(response_json, video_intelligence_pb2.())
         return response
+
+    def detect_explicit_content(self, storage_uri, segments=None):
+        features = [video_v1.enums.Feature.EXPLICIT_CONTENT_DETECTION]
+        context = video_v1.types.VideoContext(segments=segments)
+
+        print(f'Processing video "{storage_uri}"...')
+        operation = self.video_client.annotate_video(
+            input_uri=storage_uri,
+            features=features,
+            video_context=context,
+        )
+        return operation
+
+    def create_video_speech_operation(self, storage_uri, segments=None):
+        features = [video_v1.enums.Feature.SPEECH_TRANSCRIPTION]
+        config = video_v1.types.SpeechTranscriptionConfig(
+            **self.speech_config,
+        )
+
+        context = video_v1.VideoContext(
+            segments=segments,
+            speech_transcription_config=config,
+        )
+
+        print(f'Processing video "{storage_uri}"...')
+        operation = self.video_client.annotate_video(
+            input_uri=storage_uri,
+            features=features,
+            video_context=context,
+        )
+        return operation
+
 
 def parse_swears(swears="swears.txt"):
     with open(swears) as f:
@@ -226,7 +298,7 @@ def test_resume_op():
 def test():
     config = process_config()
     ga = google_speech_api(**config)
-    mute_list, transcript = ga.process(config.uri)
+    mute_list, transcript = ga.process_speech(config.uri)
 
 if __name__=="__main__":
     config = process_config()

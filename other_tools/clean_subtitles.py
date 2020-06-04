@@ -6,14 +6,8 @@ import re
 import sys
 
 
-string_list = ["www.OpenSubtitles.org",
-               "Support us",
-               "Subtitles by",
-               "Advertise your product",
-               "Corrected by"]
-
+string_list = ["OpenSubtitles.org", "Support us","Subtitles by","Advertise your product", "Corrected by"]
 matched = re.compile(rf"({'|'.join(string_list)})").search
-
 
 def test():
     test = """
@@ -45,12 +39,21 @@ def test():
             print(line)
 
 def strip_ads(path):
+    dropped = []
     with fileinput.FileInput(path, inplace=1, backup='.bak') as file:
         for line in file:
             if not matched(line):  # save lines that do not match
                 print(line, end='')  # this goes to filename due to inplace=1
+            else:
+                dropped.append(line)
+    print(dropped, path)
 
-
-root = input("Subtitle root directory: ")
+#root = input("Subtitle root directory: ") # "%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
+root = r"%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
+root = r"C:\Users\Taylor\AppData\Local\Plex Media Server\Media"
+print(Path(root).resolve())
 for path in Path(root).rglob("*.srt"):
-    strip_ads(path)
+    try:
+        strip_ads(path)
+    except:
+        pass
