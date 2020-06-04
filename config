@@ -1,0 +1,23 @@
+[main]
+testing = True
+api = video
+
+ffmpeg_path = "/usr/bin/ffmpeg"
+credential_path = "./credentials/Speech to Text-0bc76bdcf21a.json"
+video_path = "/media/taylor/Data/Linux/Github/personal_projects/cleanvid/vids/Richard Jewell/Richard.Jewell.2019.720p.mp4"
+load_response_path = "Richard.Jewell.2019.720p000_2020-06-01 11:11:25"
+load_operation_path = "Richard.Jewell.2019.720p000_2020-06-01 00:40:30"
+uri = "gs://remove_profanity_from_movie_project/Richard.Jewell.2019.720p00.flac"
+
+require_api_confirmation = true         # require confirmation before performing a billed process
+testing = false
+
+[paths]
+api_response_root = ""
+video_output_root = ""
+extracted_audio_root = ""
+muted_lists_root = ""
+
+[audio]
+sample_rate = 44100
+codec = "mp3"

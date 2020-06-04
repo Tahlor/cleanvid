@@ -53,7 +53,7 @@ class CleanProfanity:
             print(ffmpegResult.err)
             raise ValueError('Could not process %s' % (input_path))
 
-    def split_video(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
+    def split_audio(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
         """ Split video into 1 hour segments
 
         """
@@ -71,6 +71,29 @@ class CleanProfanity:
             codec_command = ""
 
         command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+        # -ac 1 : one audio channel
+        # -vn   : exclude video
+
+        print(command)
+        ffmpegResult = delegator.run(command, block=True)
+        return ffmpegResult, output
+
+    def split_video(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
+        """ Split video into 1 hour segments
+
+        """
+        if name is None:
+            name = path.stem
+
+        output = f"./temp/{name}/%03d"
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        # if AVI, convert to MP4
+        codec = ""
+        codec_command = ""
+        output_str = f'"{output}.{codec}"'
+
+
+        command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 {output_str}"""
         # -ac 1 : one audio channel
         # -vn   : exclude video
 
@@ -107,7 +130,8 @@ class CleanProfanity:
              length=1000000, # how many seconds
              start_time="0",
              end_time="99:59:59",
-             overwrite=True):
+             overwrite=True,
+             api="video"):
 
         ext = f".{self.codec}"
         name = Path(path).stem
@@ -119,11 +143,12 @@ class CleanProfanity:
             overwrite = True # don't overwrite if already uploaded
             name = Path(path).stem + "_testing"
 
-        # split
+        # split - mostly for testing!
+        # but we still need to either extract audio / reformat video as needed; if only profanity, could encode trivial video...?
         main_path = Path(f"./temp/{name}/000{ext}")
+        split = self.split_audio if self.api == "speech" else self.split_video
         if not Path(main_path).exists():
-            result, _ = self.split_video(path, name, length=length, start_time=start_time, end_time=end_time)
-
+            result, _ = self.split(path, name, length=length, start_time=start_time, end_time=end_time)
         print("Done splitting...")
 
         # upload
@@ -159,6 +184,8 @@ class CleanProfanity:
 
 if __name__=='__main__':
     config = utils.process_config()
+
+    Stop
     cp = CleanProfanity(**config)
 
     if not config.response:
