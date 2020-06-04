@@ -37,7 +37,7 @@ def create_mute_list(time_list):
     for timePair in time_list:
         lineStart = timePair[0]
         lineEnd = timePair[1]
-        muteTimeList.append("volume=enable='between(t," + format(lineStart, '.3f') + "," + format(lineEnd, '.3f') + ")':volume=0")
+        muteTimeList.append("volume=enable='between(t," + format(lineStart-.1, '.3f') + "," + format(lineEnd+.1, '.3f') + ")':volume=0")
     return muteTimeList
 
 class google_speech_api:

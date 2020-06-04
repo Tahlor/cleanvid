@@ -31,7 +31,7 @@ class CleanProfanity:
         testing = "-to 00:01:00" if testing else ""
         command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
                   f""" -filter_complex "[a:0]{",".join(mute_list)}[a]" {testing}""" + \
-                  f""" -metadata:s:a:0 title="Clean" -metadata:s:a:1 title="Normal" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ +\
+                  f""" -metadata:s:a:0 title="Clean" language="eng" -metadata:s:a:1 title="Normal" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ +\
                   f""" "{str(Path(output_path).with_suffix(output_ext))}" """
 
         """

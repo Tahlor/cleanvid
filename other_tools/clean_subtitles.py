@@ -6,7 +6,12 @@ import re
 import sys
 
 
-string_list = ["www.OpenSubtitles.org", "Support us","Subtitles by","Advertise your product"]
+string_list = ["www.OpenSubtitles.org",
+               "Support us",
+               "Subtitles by",
+               "Advertise your product",
+               "Corrected by"]
+
 matched = re.compile(rf"({'|'.join(string_list)})").search
 
 
