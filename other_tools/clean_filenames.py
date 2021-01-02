@@ -179,5 +179,19 @@ def is_iterable(object, string_is_iterable=True):
     return True
 
 
+def parse_index():
+    """ Parse existing index, so only new files are re-named
+
+    Returns:
+
+    """
+
+def create_index():
+    # see if filename/folder exists in old index
+    # if no, see if hash exists in old index
+    # if no, add it to the chopping block
+    pass
+
+
 if __name__=='__main__':
     Cleaner().clean("Q:\Media\Videos\Movies\Kids\Winnie the Pooh, A Very Merry Pooh Year (2002) [G]")

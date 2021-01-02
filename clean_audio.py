@@ -12,6 +12,7 @@ class CleanProfanity:
                  ffmpeg_path="ffmpeg ",
                  codec=".mp3",
                  sample_rate=44100,
+                 api="speech",
                  **kwargs
                  ):
         self.credential_path = credential_path
@@ -19,9 +20,12 @@ class CleanProfanity:
         self.codec = codec
         self.sample_rate = sample_rate
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
+        self.api = api
+        self.split = self.split_audio if self.api=="speech" else self.split_video
         self.speech_api = utils.google_speech_api(codec=self.codec,
                                                   sample_rate=self.sample_rate,
                                                   credential_path=self.credential_path,
+                                                  api=self.api,
                                                   **kwargs)
 
     @staticmethod
@@ -53,7 +57,7 @@ class CleanProfanity:
             print(ffmpegResult.err)
             raise ValueError('Could not process %s' % (input_path))
 
-    def split_audio(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
+    def split_audio(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", actually_perform=True):
         """ Split video into 1 hour segments
 
         """
@@ -67,18 +71,23 @@ class CleanProfanity:
             codec_command = "-c:a flac "
         elif self.codec == "mp3":
             codec_command =  f"-ar {self.sample_rate} "
+        elif self.codec == "mp4":
+            codec_command = ""
         else:
             codec_command = ""
 
-        command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+        command = f"""{self.ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
         # -ac 1 : one audio channel
         # -vn   : exclude video
 
         print(command)
-        ffmpegResult = delegator.run(command, block=True)
-        return ffmpegResult, output
+        if actually_perform:
+            ffmpegResult = delegator.run(command, block=True)
+            return ffmpegResult, output
+        else:
+            return True, None
 
-    def split_video(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
+    def split_video(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", actually_perform=True):
         """ Split video into 1 hour segments
 
         """
@@ -88,21 +97,24 @@ class CleanProfanity:
         output = f"./temp/{name}/%03d"
         Path(output).parent.mkdir(parents=True, exist_ok=True)
         # if AVI, convert to MP4
-        codec = ""
         codec_command = ""
-        output_str = f'"{output}.{codec}"'
+        output_str = f'"{output}.{self.codec}"'
 
-
-        command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 {output_str}"""
+        # ffmpeg -i input.mp4 -vf drawbox=color=black:t=fill -c:a copy output.mp4
+        command = f"""{self.ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -vf drawbox=color=black:t=fill {output_str}"""
         # -ac 1 : one audio channel
         # -vn   : exclude video
-
+        # use ss to trim BEFORE fhe input file
         print(command)
-        ffmpegResult = delegator.run(command, block=True)
-        return ffmpegResult, output
+
+        if actually_perform:
+            ffmpegResult = delegator.run(command, block=True)
+            return ffmpegResult, output
+        else:
+            return True, None
 
 
-    def upload_to_cloud(source, destination, overwrite=False):
+    def upload_to_cloud(self, source, destination, overwrite=False):
         # GO HERE: https://console.cloud.google.com/apis/credentials/serviceaccountkey
         # Choose project, select "owner" account
 
@@ -136,19 +148,22 @@ class CleanProfanity:
         ext = f".{self.codec}"
         name = Path(path).stem
 
-        if testing:
+        if testing and False:
             length = 14
-            start_time = "00:00:45"
-            end_time = "00:00:58"
+            # start_time = "00:00:45"
+            # end_time = "00:00:58"
+            # start_time = "01:23:00"
+            # end_time = "01:23:13"
+            start_time = "00:04:32"
+            end_time = "00:04:45"
+
             overwrite = True # don't overwrite if already uploaded
             name = Path(path).stem + "_testing"
 
         # split - mostly for testing!
         # but we still need to either extract audio / reformat video as needed; if only profanity, could encode trivial video...?
         main_path = Path(f"./temp/{name}/000{ext}")
-        split = self.split_audio if self.api == "speech" else self.split_video
-        if not Path(main_path).exists():
-            result, _ = self.split(path, name, length=length, start_time=start_time, end_time=end_time)
+        result, _ = self.split(path, name, length=length, start_time=start_time, end_time=end_time, actually_perform=not Path(main_path).exists())
         print("Done splitting...")
 
         # upload
@@ -183,12 +198,10 @@ class CleanProfanity:
 
 
 if __name__=='__main__':
-    config = utils.process_config()
-
-    Stop
+    config = utils.process_config("./config_hill")
     cp = CleanProfanity(**config)
 
-    if not config.response:
+    if "response" not in config or not config.response:
         # Do new proccess
         cp.main(config.video_path, overwrite=False, testing=config.testing)
     else:

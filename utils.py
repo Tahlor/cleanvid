@@ -1,3 +1,4 @@
+import sys
 import pickle
 import traceback
 from pathlib import Path
@@ -8,27 +9,57 @@ from google.api_core.operation import from_gapic
 # Speech API
 from google.cloud import speech_v1p1beta1 as speech_v1
 from google.cloud.speech_v1p1beta1.proto import cloud_speech_pb2
+#from google.cloud.speech_v2 import cloud_speech_pb2
 
 # Video Intelligence API
 from google.cloud.videointelligence_v1p3beta1.proto import video_intelligence_pb2
 from google.cloud import videointelligence_v1p3beta1 as video_v1
-
-
 
 from datetime import datetime
 from time import sleep
 import json
 import os
 from easydict import EasyDict as edict
+from configparser import ConfigParser, SectionProxy
+
+def clean_dict(d):
+    for key in d:
+        if isinstance(d[key], str):
+            d[key] = d[key].replace('"',"")
+            # if d[key].lower() == "False":
+            #     d[key] = False
+            # elif d[key].lower() == "True":
+            #     d[key] = True
+
+            print(d[key])
+        elif isinstance(d[key], (ConfigParser,dict,SectionProxy)):
+            clean_dict(d[key])
 
 def process_config(path="./config"):
-    from configparser import ConfigParser
     config = ConfigParser()
     config.read(path)
+
+    config.getboolean('main', 'require_api_confirmation') # require confirmation before performing a billed process
+    config.getboolean('main', 'testing')
+
+    if sys.platform=="win32":
+        config["main"]["credential_path"] = str((Path(os.getcwd())  / Path(config["main"]["credential_path"].replace("/","\\").replace('"',""))).resolve())
+        print(config["main"]["credential_path"])
+        config['main']['ffmpeg_path'] = r"C:\ffmpeg-4.2.2-win64-static\ffmpeg-4.2.2-win64-static\bin\ffmpeg.exe"
+        clean_dict(config)
+    else:
+        config['main']['ffmpeg_path'] = r"/usr/bin/ffmpeg"
+
+    #video_path = ""J:\Media\Videos\Misc Videos\msc\Hillbilly.Elegy.2020.1080p.WEBRip.x265-RARBG\Hillbilly.Elegy.2020.1080p.WEBRip.x265-RARBG.mp4""
+
     my_config = {s: dict(config.items(s)) for s in config.sections()}
+
+    # Ignore sections??? WHY?
     for s in config.sections():
         my_config.update(config.items(s))
-    return edict(my_config)
+    my_config = edict(my_config)
+
+    return my_config
 
 def create_mute_list(time_list):
     """
@@ -72,7 +103,7 @@ class google_speech_api:
         self.speech_config = {
             "enable_word_time_offsets": True,
             "language_code": "en-US",
-            "model": "video",  # default OR video, video is more expensive
+            "model": "video",  # default OR video audio recognition, video is more expensive
             "max_alternatives": 2,
             "profanity_filter": False
         }
@@ -241,7 +272,7 @@ class google_speech_api:
         if self.api=="speech":
             response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
         elif self.api=="video":
-            response = json_format.Parse(response_json, video_intelligence_pb2.())
+            response = json_format.Parse(response_json, video_intelligence_pb2.AnnotateVideoResponse())
         return response
 
     def detect_explicit_content(self, storage_uri, segments=None):
@@ -301,6 +332,6 @@ def test():
     mute_list, transcript = ga.process_speech(config.uri)
 
 if __name__=="__main__":
-    config = process_config()
+    config = process_config("./config_hill")
     ga = google_speech_api(**config)
     ga.resume_operation(config.operation_path)
