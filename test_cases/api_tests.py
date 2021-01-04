@@ -4,7 +4,7 @@ import decorator
 from pathlib import Path
 import os
 from google_api import google_speech_api
-from utils process_config
+from utils import process_config
 
 def test_load_response():
     """ Load a saved response and parse for muting

@@ -46,6 +46,7 @@ class CleanProfanity:
             blob.upload_from_filename(str(source))
         else:
             print(f"{destination} already uploaded")
+        print("Done uploading")
         return destination
 
     def main(self,
@@ -58,12 +59,13 @@ class CleanProfanity:
              overwrite_local=True,
              api="video",
              operation=None,
+             uri=None,
              **kwargs):
 
         ext = f".{self.codec}"
         name = Path(path).stem
 
-        if testing and False:
+        if testing:
             length = 14
             # start_time = "00:00:45"
             # end_time = "00:00:58"
@@ -89,9 +91,15 @@ class CleanProfanity:
 
         # upload
         #for vid in Path(main_path).parent.glob(f"*{ext}"):
+        prefix = r"gs://remove_profanity_from_movie_project/"
         vid = Path(processed_path)
-        destination = self.upload_to_cloud(vid, str(Path(vid.parent.name) / vid.name), overwrite=overwrite_cloud)
-        uri = f"gs://remove_profanity_from_movie_project/{destination}"
+        if uri is not None and prefix in uri:
+            uri_name = uri.replace(prefix, "")
+        else:
+            uri_name = str(Path(vid.parent.name)) / vid.name
+
+        destination = self.upload_to_cloud(vid, uri_name, overwrite=overwrite_cloud)
+        uri = f"{prefix}{destination}"
         proto_mute_list, transcript = self.speech_api.process_speech(uri, name=name, operation=operation)
 
         final_mute_list = utils.create_mute_list(proto_mute_list)
@@ -129,7 +137,7 @@ class CleanProfanity:
 
 if __name__=='__main__':
     #config = utils.process_config("testing_config.ini")
-    config = utils.process_config("hillbilly")
+    config = utils.process_config("configs/hillbilly")
 
     cp = CleanProfanity(**config)
 
@@ -142,11 +150,13 @@ if __name__=='__main__':
                                     overwrite_local=config.overwrite.overwrite_ffmpeg_files,
                                     testing=config.testing,
                                     blank_video=config.blank_video,
-                                    operation=config.load_operation_path)
+                                    operation=config.load_operation_path,
+                                    uri=config.uri)
     else:
         # Do new proccess
         cp.main(config.video_path,
                 overwrite_cloud=config.overwrite.overwrite_cloud,
                 overwrite_local=config.overwrite.overwrite_ffmpeg_files,
                 testing=config.testing,
-                blank_video=config.blank_video)
+                blank_video=config.blank_video,
+                uri=config.uri)

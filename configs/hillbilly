@@ -1,7 +1,7 @@
 [main]
 
 api = video
-uri = "gs://remove_profanity_from_movie_project/Hill_Billy_Elegy"
+uri = gs://remove_profanity_from_movie_project/Hill_Billy_Elegy/E.mp4
 
 # require confirmation before performing a billed process
 require_api_confirmation = true
@@ -25,7 +25,7 @@ muted_lists_root = ./data/mute_lists
 ffmpeg_path = /usr/bin/ffmpeg
 credential_path = ./credentials/Speech to Text-0bc76bdcf21a.json
 video_path = ./temp/E.mp4
-#load_response_path = ./data/google_api/E_testing_2021-01-03 17:56:56.response
+load_response_path = ./data/google_api/E_2021-01-04 11:13:12.response
 #load_operation_path = ./data/google_api/E_testing_2021-01-03 14:06:23.operation
 
 [audio]

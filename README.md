@@ -31,7 +31,7 @@ Video:
 Audio: 
     Billing: https://cloud.google.com/speech-to-text/pricing
     Info: https://cloud.google.com/speech-to-text/docs/
-    
+ 
 ## License
 
 This project is licensed under the Apache License, v2.0 - see the [LICENSE](LICENSE) file for details.

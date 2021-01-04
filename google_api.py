@@ -85,6 +85,14 @@ class google_speech_api:
         return response
 
     def restore_operation(self, json_path):
+        """ UNTESTED AND PROBABLY NOT WORKING
+
+        Args:
+            json_path:
+
+        Returns:
+
+        """
         # Convert JSON-formatted string to proto message
         operation_json = json.load(Path(json_path).open())
         operation = json_format.Parse(operation_json, operations_pb2.Operation())
@@ -126,15 +134,14 @@ class google_speech_api:
                 done = True
             except Exception as e:
                 try:
-                    if "progress_percent" in operation.metadata:
+                    if "progress_percent" in operation.metadata.__dict__:
                         print(f"No response...trying again {operation.metadata.progress_percent}%")
                     else:
                         percent = operation.metadata.annotation_progress._pb[0].progress_percent
                         print(f"No response...trying again {percent}%")
-                    if False:
-                        traceback.print_exc()
                 except:
                     print("Problem with metadata")
+                    traceback.print_exc()
             sleep(10)
 
         # Save the response!
@@ -226,7 +233,7 @@ class google_speech_api:
         if self.require_api_confirmation:
             confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
             if confirmation.lower() != "y":
-                return
+                raise Exception("Did not agree to recognize speech")
 
         operation = self.speech_client.long_running_recognize(config, audio)
         return operation
@@ -243,7 +250,7 @@ class google_speech_api:
         # The first result includes start and end time word offsets
         mute_list = []
         if "Annotate" in str(type(response)):
-            results = [x.speech_transcriptions[0] for x in response.annotation_results]
+            results = [x for x in response.annotation_results[0].speech_transcriptions]
         else:
             results = response.results
         transcript = []
@@ -254,7 +261,6 @@ class google_speech_api:
                 for word in alternative.words:
                     _word = strip_punctuation.sub("", word.word).lower()
                     compound_phrase = f"{previous_word} {_word}".strip()
-                    print(compound_phrase)
                     if compound_phrase in self.swears and previous_start_time:
                         end = convert_to_seconds(word.end_time)
                         mute_list.append((previous_start_time, end))
@@ -315,7 +321,7 @@ class google_speech_api:
         if self.require_api_confirmation:
             confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
             if confirmation.lower() != "y":
-                return
+                raise Exception("Did not agree to recognize speech")
 
         operation = self.client.annotate_video(config, audio)
         return operation
@@ -365,7 +371,7 @@ class google_speech_api:
         if self.require_api_confirmation:
             confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
             if confirmation.lower() != "y":
-                return
+                raise Exception("Did not agree to recognize speech")
 
         print("\nProcessing video for speech transcription.")
         return operation

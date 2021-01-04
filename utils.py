@@ -63,7 +63,7 @@ def trim_video(input, output=None, start="00:00:00", end="99:00:00", ffmpeg_path
         if Path(output).suffix != Path(input).suffix:
             output = Path(output).with_suffix(Path(input).suffix)
 
-    command = f"""{ffmpeg_path} -y -i "{input}" -ss {start} -to {end} "{output}" """
+    command = f"""{ffmpeg_path} -ss {start} -to {end} -y -i "{input}" "{output}" """
     print(command)
     ffmpegResult = delegator.run(command, block=True)
 
@@ -87,6 +87,7 @@ def remove_video_track(input, output=None, ffmpeg_path=None):
 def process_video(input, output=None, ffmpeg_path=None, blank_video="", overwrite=True):
     blank_video = "-vf drawbox=color=black:t=fill" if blank_video else ""
     command = f"""{ffmpeg_path} -y -i "{input}" -af dynaudnorm -ac 1 {blank_video} "{output}" """
+    print(command)
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
 
@@ -128,7 +129,7 @@ def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="9
     else:
         codec_command = ""
 
-    command = f"""{ffmpeg_path} -i -y "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i -y "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
     # -ac 1 : one audio channel
     # -vn   : exclude video
 
@@ -167,8 +168,8 @@ def process_config(path="./config"):
     from configparser import ConfigParser
     config = ConfigParser()
     config.read(path)
-    config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
-    config.getboolean('main', 'testing')
+    # config["main"]["require_api_confirmation"] = config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
+    # config["main"]["testing"] = config.getboolean('main', 'testing')
     my_config = {s: dict(config.items(s)) for s in config.sections()}
     for s in config.sections():
         for key,item in my_config[s].items():
@@ -177,7 +178,8 @@ def process_config(path="./config"):
             elif item.lower() == "false":
                 my_config[s][key] = False
 
-        my_config.update(config.items(s))
+        my_config.update(my_config[s].items())
+
     return edict(my_config)
 
 def create_mute_list(time_list):
