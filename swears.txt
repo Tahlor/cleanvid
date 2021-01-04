@@ -467,7 +467,7 @@ handjobs
 hard on
 headfuck
 headfucks
-hell|heck
+#hell|heck
 henshit
 henshits
 homo
@@ -667,6 +667,7 @@ shittin
 shitting
 shittings
 shitty
+shit
 shit|poop
 skank
 skullfuck

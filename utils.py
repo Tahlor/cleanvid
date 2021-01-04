@@ -1,32 +1,182 @@
+import os
+import delegator
 import pickle
 import traceback
 from pathlib import Path
-from google.protobuf import json_format
-from google.longrunning import operations_pb2
-from google.api_core.operation import from_gapic
-
-# Speech API
-from google.cloud import speech_v1p1beta1 as speech_v1
-from google.cloud.speech_v1p1beta1.proto import cloud_speech_pb2
-
-# Video Intelligence API
-from google.cloud.videointelligence_v1p3beta1.proto import video_intelligence_pb2
-from google.cloud import videointelligence_v1p3beta1 as video_v1
-
-
-
-from datetime import datetime
-from time import sleep
-import json
-import os
 from easydict import EasyDict as edict
+import google_api
+
+FFMPEG = "ffmpeg "
+
+def ffmpeg(func):
+    """ Make the appropriate directories, raise error on failure, etc.
+
+    Args:
+        func:
+
+    Returns:
+
+    """
+    def wrapper(input, output=None, overwrite=True, *args, ffmpeg_path="ffmpeg ", **kwargs):
+        ffmpeg_path = FFMPEG if ffmpeg_path is None else ffmpeg_path
+        if not output is None:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+
+        if output is None:
+            output = Path(input).parent / (Path(input).stem + "_DYN_AUDIO" + Path(input).suffix) # dynamic audio on all
+        output = match_suffix(input, output)
+
+        if not output.exists() or overwrite:
+            ffmpegResult, output = func(input, output, *args, **kwargs, ffmpeg_path=ffmpeg_path)
+            if (ffmpegResult.return_code != 0) or (not os.path.isfile(output)):
+                print(ffmpegResult.err)
+                raise ValueError('Could not process %s' % (output))
+            return ffmpegResult, output
+        else:
+            return True, output
+
+    return wrapper
+
+def blank_sections():
+    """ Replace video with blank screen
+
+    Returns:
+
+    """
+    #command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -vf drawbox=color=black:t=fill {output_str}"""
+    pass
+
+def skip_sections():
+    """ Skip video and audio for section
+
+    Returns:
+
+    """
+    # ffmpeg -i input.mp4 -filter_complex '[0:v] trim=end=01:21:47 [v1], [0:a] atrim=end=01:21:47 [a1], [0:v] trim=start=01:22:24 [v2], [0:a] atrim=start=01:22:24 [a2], [v1][a1][v2][a2] concat=n=2:v=1:a=1 [v][a]' -map '[v]' -map '[a]' output.mp4
+    pass
+
+@ffmpeg
+def trim_video(input, output=None, start="00:00:00", end="99:00:00", ffmpeg_path=None):
+    if output is None:
+        output = Path(input).parent / (Path(input).stem + "_TRIM" + Path(input).suffix)
+    else:
+        if Path(output).suffix != Path(input).suffix:
+            output = Path(output).with_suffix(Path(input).suffix)
+
+    command = f"""{ffmpeg_path} -y -i "{input}" -ss {start} -to {end} "{output}" """
+    print(command)
+    ffmpegResult = delegator.run(command, block=True)
+
+    return ffmpegResult, output
+
+def match_suffix(input, out):
+    if Path(out).suffix != Path(input).suffix:
+        output = Path(out).with_suffix(Path(input).suffix)
+    return output
+
+@ffmpeg
+def remove_video_track(input, output=None, ffmpeg_path=None):
+    if output is None:
+        output = Path(input).parent / (Path(input).stem + "_NO_VIDEO" + Path(input).suffix)
+    output = match_suffix(input, output)
+    command = f"""{ffmpeg_path} -y -i "{input}" -vn "{output}" """
+    ffmpegResult = delegator.run(command, block=True)
+    return ffmpegResult, output
+
+@ffmpeg
+def process_video(input, output=None, ffmpeg_path=None, blank_video="", overwrite=True):
+    blank_video = "-vf drawbox=color=black:t=fill" if blank_video else ""
+    command = f"""{ffmpeg_path} -y -i "{input}" -af dynaudnorm -ac 1 {blank_video} "{output}" """
+    ffmpegResult = delegator.run(command, block=True)
+    return ffmpegResult, output
+
+@ffmpeg
+def process_audio(input, output, ffmpeg_path="ffmpeg ",
+                sample_rate=44100, codec="mp3"):
+    if codec[0] != ".":
+        codec = "." + codec
+    if codec == ".flac":
+        codec_command = "-c:a flac "
+    elif codec == ".mp3":
+        codec_command =  f"-ar {sample_rate} "
+    else:
+        codec_command = ""
+
+    if output[-len(codec):] != codec:
+        output_str = str(Path(output).with_suffix(codec))
+
+    command = f"""{ffmpeg_path} -y -i "{input}" {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+    ffmpegResult = delegator.run(command, block=True)
+    return ffmpegResult, output
+
+
+def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path="ffmpeg ",
+                sample_rate=44100, codec="mp3"):
+    """ Split video into 1 hour segments
+
+    """
+    if name is None:
+        name = path.stem
+
+    output = f"./temp/{name}/%03d"
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    output_str = f'"{output}.{codec}"'
+    if codec == "flac":
+        codec_command = "-c:a flac "
+    elif codec == "mp3":
+        codec_command =  f"-ar {sample_rate} "
+    else:
+        codec_command = ""
+
+    command = f"""{ffmpeg_path} -i -y "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+    # -ac 1 : one audio channel
+    # -vn   : exclude video
+
+    print(command)
+    ffmpegResult = delegator.run(command, block=True)
+    return ffmpegResult, output
+
+def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path=None):
+    """ Split video into 1 hour segments
+
+    """
+    ffmpeg_path = FFMPEG if ffmpeg_path is None else ffmpeg_path
+    if name is None:
+        name = path.stem
+
+    output = f"./temp/{name}/%03d"
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    # if AVI, convert to MP4
+    codec = ""
+    codec_command = ""
+    output_str = f'"{output}.{codec}"'
+
+
+    #command = f"""{ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 "{output_str}" """
+    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -vf drawbox=color=black:t=fill {output_str}"""
+    # -ac 1 : one audio channel
+    # -vn   : exclude video
+    # -af dynaudnorm : make sound volumes all the same (for background swears)
+    # -vf drawbox=color=black:t=fill : replace video with black
+    print(command)
+    ffmpegResult = delegator.run(command, block=True)
+    return ffmpegResult, output
+
 
 def process_config(path="./config"):
     from configparser import ConfigParser
     config = ConfigParser()
     config.read(path)
+    config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
+    config.getboolean('main', 'testing')
     my_config = {s: dict(config.items(s)) for s in config.sections()}
     for s in config.sections():
+        for key,item in my_config[s].items():
+            if item.lower() == "true":
+                my_config[s][key] = True
+            elif item.lower() == "false":
+                my_config[s][key] = False
+
         my_config.update(config.items(s))
     return edict(my_config)
 
@@ -47,260 +197,42 @@ def create_mute_list(time_list):
         muteTimeList.append("volume=enable='between(t," + format(lineStart-.1, '.3f') + "," + format(lineEnd+.1, '.3f') + ")':volume=0")
     return muteTimeList
 
-class google_speech_api:
-
-    def __init__(self,
-                 credential_path,
-                 codec="flac",
-                 sample_rate=44100,
-                 require_api_confirmation=True,
-                 api="speech", # speech, video
-                 **kwargs
-                 ):
-        self.swears = parse_swears()
-        self.codec = codec
-        self.sample_rate = sample_rate
-        self.api = api
-        if api=="speech":
-            self.speech_client = speech_v1.SpeechClient()
-        elif api=="video":
-            self.video_client = video_v1.VideoIntelligenceServiceClient()
-
-        self.require_api_confirmation = require_api_confirmation
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
-
-        self.speech_config = {
-            "enable_word_time_offsets": True,
-            "language_code": "en-US",
-            "model": "video",  # default OR video, video is more expensive
-            "max_alternatives": 2,
-            "profanity_filter": False
-        }
-
-
-    def serialize_operation(self, future, name):
-        operation = future.operation
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Convert operation protobuf message to JSON-formatted string
-        operation_json = json_format.MessageToJson(operation)
-        json.dump(operation_json, Path(f"./data/google_api_responses/{name}_{now}.operation").open("w"))
-        return operation_json
-
-    def serialize_response(self, response, name):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        operation_json = json_format.MessageToJson(response)
-        json.dump(operation_json, Path(f"./data/google_api_responses/{name}_{now}.response").open("w"))
-
-    def restore_operation(self, json_path):
-        # Convert JSON-formatted string to proto message
-        operation_json = json.load(Path(json_path).open())
-        operation = json_format.Parse(operation_json, operations_pb2.Operation())
-
-        # load operation from backing store
-        future = from_gapic(
-            operation,
-            self.speech_client.transport._operations_client,
-            cloud_speech_pb2.LongRunningRecognizeResponse,
-            metadata_type=cloud_speech_pb2.LongRunningRecognizeMetadata
-        )
-
-        return future
-
-    def get_response(self, operation=None, name=None):
-        if operation is None:
-            operation = self.restore_operation(Path(f"./data/google_api_responses/{name}.operation"))
-        done = False
-
-        while not done:
-            print("Waiting for response...")
-            try:
-                response = operation.result(timeout=30)
-                done = True
-            except Exception as e:
-                print(f"No response...trying again {operation.metadata.progress_percent}%")
-                if False:
-                    traceback.print_exc()
-
-            sleep(10)
-
-       # Save the response!
-        try:
-            self.serialize_response(response, name=name)
-        except:
-            traceback.print_exc()
-        return response
-
-    def process_speech(self, storage_uri, name=None, response=None):
-        if name is None:
-            name = Path(storage_uri).stem
-
-        if response is None:
-            if self.api == "speech":
-                operation = self.create_speech_operation(storage_uri=storage_uri, )
-            elif self.api == "video":
-                operation = self.create_video_speech_operation(storage_uri=storage_uri, )
-            self.serialize_operation(operation, name=name)
-            response = self.get_response(operation, name=name)
-        else:
-            response = self.load_response(response)
-        
-        mute_list, transcript = self.create_mute_list_from_response(response)
-        pickle.dump({"mute_list": mute_list, "transcript": transcript},
-                    Path(f"./data/mute_lists/{name}.pickle").open("wb"))
-        return mute_list, transcript
-
-    def process_adult_content(self, storage_uri, name=None, response=None):
-        if name is None:
-            name = Path(storage_uri).stem
-
-        if response is None:
-            operation = self.detect_explicit_content(storage_uri=storage_uri)
-            self.serialize_operation(operation, name=name)
-            response = self.get_response(operation, name=name)
-        else:
-            response = self.load_response(response)
-
-        skip_list = self.create_skip_list(response)
-        pickle.dump(skip_list,
-                    Path(f"./data/mute_lists/{name}.pickle").open("wb"))
-        return skip_list
-
-    def create_skip_list(self, response):
-        """ Create a list of tuples
-
-        Args:
-            response: A video response object
-
-        Returns:
-            list of tuples: [[start_skip, end_skip], ...]
-        """
-        pass
-
-    def create_speech_operation(self, storage_uri, name=None):
-        """
-        Print start and end time of each word spoken in audio file from Cloud Storage
-        https://cloud.google.com/speech-to-text/docs/basics#select-model
-
-        # storage_uri = 'gs://cloud-samples-data/speech/brooklyn_bridge.flac'
-
-        Args:
-          storage_uri URI for audio file in Cloud Storage, e.g. gs://[BUCKET]/[FILE]
-        """
-
-        # When enabled, the first result returned by the API will include a list
-        # of words and the start and end time offsets (timestamps) for those words.
-        # The language of the supplied audio
-
-        config = self.speech_config.copy()
-        if self.codec == "flac":
-            config.update({"encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.FLAC})
-        elif self.codec == "mp3":
-            config.update({
-                "sample_rate_hertz": self.sample_rate,
-                "encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.MP3,
-                })
-
-        audio = {"uri": storage_uri}
-
-        # Use confirmation
-        if self.require_api_confirmation:
-            confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
-            if confirmation.lower() != "y":
-                return
-
-        operation = self.speech_client.long_running_recognize(config, audio)
-        return operation
-
-    def create_mute_list_from_response(self, response):
-        print(u"Waiting for operation to complete...")
-
-        # The first result includes start and end time word offsets
-        mute_list = []
-        results = response.results
-        transcript = []
-        for result in results:
-            for alternative in result.alternatives:
-                for word in alternative.words:
-                    if word.word in self.swears:
-                        start = word.start_time.seconds + word.start_time.nanos*10**-9
-                        end   = word.end_time.seconds + word.end_time.nanos*10**-9
-                        mute_list.append((start, end))
-            phrase = result.alternatives[0].transcript
-            if phrase:
-                transcript.append(phrase)
-        return mute_list, transcript
-
-    def resume_operation(self, name):
-        response = self.get_response(name=name)
-        mute_list, transcript = self.create_mute_list_from_response(response)
-        return mute_list
-
-    def load_response(self, name):
-        json_path = f"./data/google_api_responses/{name}.response"
-        response_json = json.load(Path(json_path).open("r"))
-        if self.api=="speech":
-            response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
-        elif self.api=="video":
-            response = json_format.Parse(response_json, video_intelligence_pb2.())
-        return response
-
-    def detect_explicit_content(self, storage_uri, segments=None):
-        features = [video_v1.enums.Feature.EXPLICIT_CONTENT_DETECTION]
-        context = video_v1.types.VideoContext(segments=segments)
-
-        print(f'Processing video "{storage_uri}"...')
-        operation = self.video_client.annotate_video(
-            input_uri=storage_uri,
-            features=features,
-            video_context=context,
-        )
-        return operation
-
-    def create_video_speech_operation(self, storage_uri, segments=None):
-        features = [video_v1.enums.Feature.SPEECH_TRANSCRIPTION]
-        config = video_v1.types.SpeechTranscriptionConfig(
-            **self.speech_config,
-        )
-
-        context = video_v1.VideoContext(
-            segments=segments,
-            speech_transcription_config=config,
-        )
-
-        print(f'Processing video "{storage_uri}"...')
-        operation = self.video_client.annotate_video(
-            input_uri=storage_uri,
-            features=features,
-            video_context=context,
-        )
-        return operation
-
 
 def parse_swears(swears="swears.txt"):
     with open(swears) as f:
         lines = [line.rstrip('\n').split("|")[0] for line in f]
     return lines
 
-def test_load_response():
-    # Load old response
-    config = process_config()
-    ga = google_speech_api(**config)
-    response = ga.load_response(config.response_path)
-    mute_list, transcript = ga.create_mute_list_from_response(response)
-    print(response.results)
-    print(mute_list)
+def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg_path="ffmpeg "):
+    output_ext = Path(input_path).suffix
 
-def test_resume_op():
-    config = process_config()
-    ga = google_speech_api(**config)
-    ga.resume_operation(config.load_operation_path)
+    testing = "-to 00:01:00" if testing else ""
+    command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
+              f""" -filter_complex "[a:0]{",".join(mute_list)}[a]" {testing}""" + \
+              f""" -metadata:s:a:0 title="Clean",language=eng -metadata:s:a:1 title="Normal" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
+              f""" "{str(Path(output_path).with_suffix(output_ext))}" """
 
-def test():
-    config = process_config()
-    ga = google_speech_api(**config)
-    mute_list, transcript = ga.process_speech(config.uri)
+    """
+    -y – A global option to overwrite the output file if it already exists.
+    -map 0:v – Designate the video stream(s) from the first input as a source for the output file.
+    -c:v copy – Stream copy the video. This just muxes the input to the output. No re-encoding occurs.
+    -map 0:a – Designate the audio stream(s) from the first input as a source for the output file.
+    -c:a copy – Stream copy the audio. This just muxes the input to the output. No re-encoding occurs.
+    -strict -2 -c:a aac – Use the native FFmpeg AAC audio encoder. -strict -2 is required as a way that you acknowledge that the encoder is designated as experimental. It is not a great encoder, but it is not too bad at higher bitrates.
+
+    """
+
+    # "ffmpeg -i video -c:v copy -af volume=0:enable='between(t,60,100)+between(t,330,370)+between(t,465,541.3)' out.mp4"
+
+    print(command)
+    ffmpegResult = delegator.run(command,
+                                 block=True)
+    if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
+        print(ffmpegResult.err)
+        raise ValueError('Could not process %s' % (input_path))
+
 
 if __name__=="__main__":
     config = process_config()
-    ga = google_speech_api(**config)
+    ga = google_api(**config)
     ga.resume_operation(config.operation_path)

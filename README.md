@@ -22,6 +22,9 @@ VidClean is tool to mute profanity in video files:
 * Alternatively, use subtitles + forced alignment, or some opensource alternative.
 
 ## Resources:
+Free Trial:
+    https://console.cloud.google.com/freetrial/signup/tos
+
 Video: 
     Billing: https://cloud.google.com/video-intelligence/pricing
     Info: https://cloud.google.com/video-intelligence/docs/analyze-safesearch

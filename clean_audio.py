@@ -2,6 +2,7 @@ import re
 import os, sys
 import delegator
 from google.cloud import storage
+import google_api
 from pathlib import Path
 import utils
 import pickle
@@ -19,90 +20,13 @@ class CleanProfanity:
         self.codec = codec
         self.sample_rate = sample_rate
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
-        self.speech_api = utils.google_speech_api(codec=self.codec,
+        self.speech_api = google_api.google_speech_api(codec=self.codec,
                                                   sample_rate=self.sample_rate,
                                                   credential_path=self.credential_path,
                                                   **kwargs)
 
-    @staticmethod
-    def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg_path="ffmpeg "):
-        output_ext = Path(input_path).suffix
 
-        testing = "-to 00:01:00" if testing else ""
-        command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
-                  f""" -filter_complex "[a:0]{",".join(mute_list)}[a]" {testing}""" + \
-                  f""" -metadata:s:a:0 title="Clean" language="eng" -metadata:s:a:1 title="Normal" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ +\
-                  f""" "{str(Path(output_path).with_suffix(output_ext))}" """
-
-        """
-        -y – A global option to overwrite the output file if it already exists.
-        -map 0:v – Designate the video stream(s) from the first input as a source for the output file.
-        -c:v copy – Stream copy the video. This just muxes the input to the output. No re-encoding occurs.
-        -map 0:a – Designate the audio stream(s) from the first input as a source for the output file.
-        -c:a copy – Stream copy the audio. This just muxes the input to the output. No re-encoding occurs.
-        -strict -2 -c:a aac – Use the native FFmpeg AAC audio encoder. -strict -2 is required as a way that you acknowledge that the encoder is designated as experimental. It is not a great encoder, but it is not too bad at higher bitrates.
-    
-        """
-
-        #"ffmpeg -i video -c:v copy -af volume=0:enable='between(t,60,100)+between(t,330,370)+between(t,465,541.3)' out.mp4"
-
-        print(command)
-        ffmpegResult = delegator.run(command,
-                                      block=True)
-        if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
-            print(ffmpegResult.err)
-            raise ValueError('Could not process %s' % (input_path))
-
-    def split_audio(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
-        """ Split video into 1 hour segments
-
-        """
-        if name is None:
-            name = path.stem
-
-        output = f"./temp/{name}/%03d"
-        Path(output).parent.mkdir(parents=True, exist_ok=True)
-        output_str = f'"{output}.{self.codec}"'
-        if self.codec == "flac":
-            codec_command = "-c:a flac "
-        elif self.codec == "mp3":
-            codec_command =  f"-ar {self.sample_rate} "
-        else:
-            codec_command = ""
-
-        command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
-        # -ac 1 : one audio channel
-        # -vn   : exclude video
-
-        print(command)
-        ffmpegResult = delegator.run(command, block=True)
-        return ffmpegResult, output
-
-    def split_video(self, path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59"):
-        """ Split video into 1 hour segments
-
-        """
-        if name is None:
-            name = path.stem
-
-        output = f"./temp/{name}/%03d"
-        Path(output).parent.mkdir(parents=True, exist_ok=True)
-        # if AVI, convert to MP4
-        codec = ""
-        codec_command = ""
-        output_str = f'"{output}.{codec}"'
-
-
-        command = f"""{self.ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 {output_str}"""
-        # -ac 1 : one audio channel
-        # -vn   : exclude video
-
-        print(command)
-        ffmpegResult = delegator.run(command, block=True)
-        return ffmpegResult, output
-
-
-    def upload_to_cloud(source, destination, overwrite=False):
+    def upload_to_cloud(self, source, destination, overwrite=False):
         # GO HERE: https://console.cloud.google.com/apis/credentials/serviceaccountkey
         # Choose project, select "owner" account
 
@@ -130,33 +54,45 @@ class CleanProfanity:
              length=1000000, # how many seconds
              start_time="0",
              end_time="99:59:59",
-             overwrite=True,
-             api="video"):
+             overwrite_cloud=True,
+             overwrite_local=True,
+             api="video",
+             operation=None,
+             **kwargs):
 
         ext = f".{self.codec}"
         name = Path(path).stem
 
-        if testing:
+        if testing and False:
             length = 14
-            start_time = "00:00:45"
-            end_time = "00:00:58"
-            overwrite = True # don't overwrite if already uploaded
-            name = Path(path).stem + "_testing"
+            # start_time = "00:00:45"
+            # end_time = "00:00:58"
+            # start_time = "01:23:00"
+            # end_time = "01:23:13"
+            start_time = "00:04:32"
+            end_time = "00:04:45"
+            overwrite_local = overwrite_cloud = True
+            name += "_testing"
+            output_path = Path(f"./temp/{name}")
+            output_path.mkdir(exist_ok=True, parents=True)
+            result, path = utils.trim_video(input=path, output=output_path, start=start_time, end=end_time)
 
+        processed_path = Path(f"./temp/{name}")
+        processed_path.mkdir(exist_ok=True, parents=True)
+        processed_path = processed_path / name
         # split - mostly for testing!
-        # but we still need to either extract audio / reformat video as needed; if only profanity, could encode trivial video...?
-        main_path = Path(f"./temp/{name}/000{ext}")
-        split = self.split_audio if self.api == "speech" else self.split_video
-        if not Path(main_path).exists():
-            result, _ = self.split(path, name, length=length, start_time=start_time, end_time=end_time)
-        print("Done splitting...")
+        process = utils.process_video if api == "video" else utils.process_audio
+
+        if not Path(processed_path).exists():
+            result, processed_path = process(path, processed_path, overwrite=overwrite_local, **kwargs)
+        print("Done processing...")
 
         # upload
         #for vid in Path(main_path).parent.glob(f"*{ext}"):
-        vid = Path(main_path)
-        destination = self.upload_to_cloud(vid, str(Path(vid.parent.name) / vid.name), overwrite=overwrite)
+        vid = Path(processed_path)
+        destination = self.upload_to_cloud(vid, str(Path(vid.parent.name) / vid.name), overwrite=overwrite_cloud)
         uri = f"gs://remove_profanity_from_movie_project/{destination}"
-        proto_mute_list, transcript = self.speech_api.process_speech(uri, name=name)
+        proto_mute_list, transcript = self.speech_api.process_speech(uri, name=name, operation=operation)
 
         final_mute_list = utils.create_mute_list(proto_mute_list)
 
@@ -164,34 +100,53 @@ class CleanProfanity:
             final_mute_list = utils.create_mute_list([[0,1]])
 
         # Update
+        path = Path(path)
         output = path.parent / (path.stem + "_clean" + path.suffix)
-        self.create_clean_video(path, final_mute_list, output, testing=testing)
+        utils.create_clean_video(path, final_mute_list, output, testing=testing)
 
-    def process_saved_response(self, video_path, response_path, name=None):
-        if name is None:
-            name = response_path.split("000")[0]
-        if response_path.endswith(".response"):
-            response_path = response_path[:-len(".response")]
+    def process_saved_operation(self, *args, operation, **kwargs):
+        operation = self.speech_api.restore_operation(operation)
+        return self.main(*args, operation=operation, **kwargs)
 
+    def process_saved_response(self, video_path, response_path, name=None, output_path=None):
+        # if name is None:
+        #     name = Path(response_path)
+        #     name = response_path.split("000")[0]
+        # if name.endswith(".response"):
+        #     name = name[:-len(".response")]
+        video_path = Path(video_path)
+        if output_path is None:
+            output_path = Path(response_path).parent
+        name = Path(response_path).stem
         response = self.speech_api.load_response(response_path)
         mute_list, transcript = self.speech_api.create_mute_list_from_response(response)
-        pickle.dump({"mute_list": mute_list, "transcript": transcript}, Path(f"./data/mute_lists/{name}.pickle").open("wb"))
+        pickle.dump({"mute_list": mute_list, "transcript": transcript}, (output_path / f"{name}.pickle").open("wb"))
         print(transcript)
         final_mute_list = utils.create_mute_list(mute_list)
         output = video_path.parent / (video_path.stem + "_clean" + video_path.suffix)
-        CleanProfanity.create_clean_video(video_path, final_mute_list, output)
+        utils.create_clean_video(video_path, final_mute_list, output)
 
 
 if __name__=='__main__':
-    config = utils.process_config()
+    #config = utils.process_config("testing_config.ini")
+    config = utils.process_config("hillbilly")
 
-    Stop
     cp = CleanProfanity(**config)
 
-    if not config.response:
-        # Do new proccess
-        cp.main(config.video_path, overwrite=False, testing=config.testing)
-    else:
+    if "load_response_path" in config.keys() and config.load_response_path:
         # Process previous response
-        CleanProfanity.process_saved_response(config.video_path, response=config.load_response_path)
-
+        cp.process_saved_response(config.video_path, response_path=config.load_response_path)
+    elif "load_operation_path" in config.keys() and config.load_operation_path:
+        cp.process_saved_operation(config.video_path,
+                                    overwrite_cloud=config.overwrite.overwrite_cloud,
+                                    overwrite_local=config.overwrite.overwrite_ffmpeg_files,
+                                    testing=config.testing,
+                                    blank_video=config.blank_video,
+                                    operation=config.load_operation_path)
+    else:
+        # Do new proccess
+        cp.main(config.video_path,
+                overwrite_cloud=config.overwrite.overwrite_cloud,
+                overwrite_local=config.overwrite.overwrite_ffmpeg_files,
+                testing=config.testing,
+                blank_video=config.blank_video)
