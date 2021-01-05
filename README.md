@@ -25,6 +25,9 @@ VidClean is tool to mute profanity in video files:
 Free Trial:
     https://console.cloud.google.com/freetrial/signup/tos
 
+Cloud Storage:
+    https://console.cloud.google.com/storage/browser?pli=1
+
 Video: 
     Billing: https://cloud.google.com/video-intelligence/pricing
     Info: https://cloud.google.com/video-intelligence/docs/analyze-safesearch

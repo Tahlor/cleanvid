@@ -1,0 +1,33 @@
+[main]
+
+api = video
+video_path = J:\Media\Videos\Movies\Unorganized\Touching.the.Void.2003.1080p.BluRay.H264.AAC-RARBG\Touching.the.Void.2003.1080p.BluRay.H264.AAC-RARBG.mp4
+
+# require confirmation before performing a billed process
+require_api_confirmation = true
+testing = false
+blank_video = true
+
+start_time =  # not implemented
+end_time =  # not implemented
+
+[overwrite]
+overwrite_cloud = false
+overwrite_ffmpeg_files = false
+
+[paths]
+api_response_root = ./data/google_api/backup
+video_output_root =
+extracted_audio_root = ./temp
+muted_lists_root = ./data/mute_lists
+
+ffmpeg_path = C:\ffmpeg-4.2.2-win64-static\ffmpeg-4.2.2-win64-static\bin\ffmpeg.exe
+#ffmpeg_path = /usr/bin/ffmpeg
+credential_path = ./credentials/Speech to Text-0bc76bdcf21a.json
+#video_path = D:\Github\cleanvid\temp\The.Shawshank.Redemption.1994.1080p.BluRay.x265-RARBG_testing\The.Shawshank.Redemption.1994.1080p.BluRay.x265-RARBG_testing.mp4
+#load_response_path = ./data/google_api/The.Shawshank.Redemption.1994.1080p.BluRay.x265-RARBG_2021-01-05 10;15;50.response
+#load_operation_path = ./data/google_api/The.Shawshank.Redemption.1994.1080p.BluRay.x265-RARBG_testing_2021-01-04 23;17;06.operation
+
+[audio]
+sample_rate = 44100
+codec = mp4

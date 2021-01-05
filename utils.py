@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 from easydict import EasyDict as edict
 import google_api
+import re
 
 FFMPEG = "ffmpeg "
 
@@ -71,8 +72,8 @@ def trim_video(input, output=None, start="00:00:00", end="99:00:00", ffmpeg_path
 
 def match_suffix(input, out):
     if Path(out).suffix != Path(input).suffix:
-        output = Path(out).with_suffix(Path(input).suffix)
-    return output
+        out = Path(out).with_suffix(Path(input).suffix)
+    return out
 
 @ffmpeg
 def remove_video_track(input, output=None, ffmpeg_path=None):
@@ -164,20 +165,27 @@ def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="9
     return ffmpegResult, output
 
 
-def process_config(path="./config"):
+def process_config(path="./configs/default_config", video_path=""):
     from configparser import ConfigParser
     config = ConfigParser()
     config.read(path)
     # config["main"]["require_api_confirmation"] = config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
     # config["main"]["testing"] = config.getboolean('main', 'testing')
     my_config = {s: dict(config.items(s)) for s in config.sections()}
+    if video_path:
+        my_config["main"]["video_path"] = video_path
+    if not "uri" in my_config["main"]:
+        p = Path(my_config["main"]["video_path"])
+        name = re.sub('[^-a-zA-Z_0-9]+', "", re.sub('[. _]+', "_", p.stem))
+        my_config["main"]["uri"] = rf"gs://remove_profanity_from_movie_project/{name}{p.suffix}"
     for s in config.sections():
         for key,item in my_config[s].items():
-            if item.lower() == "true":
+            if item.lower().strip() == "true":
                 my_config[s][key] = True
-            elif item.lower() == "false":
+            elif item.lower().strip() == "false":
                 my_config[s][key] = False
 
+        # Put all options on the top level, e.g. get rid of "Main", "paths", etc. sections
         my_config.update(my_config[s].items())
 
     return edict(my_config)
@@ -235,6 +243,7 @@ def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg
 
 
 if __name__=="__main__":
-    config = process_config()
-    ga = google_api(**config)
-    ga.resume_operation(config.operation_path)
+    config = process_config(video_path="example/video.mp4")
+    print(config.uri)
+    #ga = google_api(**config)
+    #ga.resume_operation(config.operation_path)

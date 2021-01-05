@@ -17,6 +17,7 @@ from google.api_core.operation import from_gapic
 from google.cloud import speech_v1p1beta1 as speech_v1
 from google.cloud.speech_v1p1beta1.proto import cloud_speech_pb2
 
+
 # Video Intelligence API
 from google.cloud import videointelligence
 
@@ -63,7 +64,7 @@ class google_speech_api:
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
 
     def serialize_operation(self, future, name):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
         # if isinstance(future, _video_intelligence.AnnotateVideoResponse):
         #     operation = future._pb
         # else:
@@ -71,11 +72,13 @@ class google_speech_api:
         operation = future.operation
         # Convert operation protobuf message to JSON-formatted string
         operation_json = json_format.MessageToJson(operation)
+        output_path = Path(f"./data/google_api/{name}_{now}.operation").resolve()
+        output_path.parent.mkdir(exist_ok=True,parents=True)
         json.dump(operation_json, Path(f"./data/google_api/{name}_{now}.operation").open("w"))
         return operation_json
 
     def serialize_response(self, response, name):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
         try:
             operation_json = json_format.MessageToJson(response)
         except: # video_intelligence.AnnotateVideoResponse
@@ -131,10 +134,17 @@ class google_speech_api:
             print("Waiting for response...")
             try:
                 response = operation.result(timeout=60)
-                done = True
+                if response is None:
+                    if hasattr(operation, "operation"):
+                        response = operation.operation.response
+                        done = True
+                        # NOT WORKING YET - THIS HAPPENS WHEN LOADING AN OPERATION
+                else:
+                    done = True
+
             except Exception as e:
                 try:
-                    if "progress_percent" in operation.metadata.__dict__:
+                    if hasattr(operation.metadata, "progress_percent"):
                         print(f"No response...trying again {operation.metadata.progress_percent}%")
                     else:
                         percent = operation.metadata.annotation_progress._pb[0].progress_percent
@@ -169,6 +179,7 @@ class google_speech_api:
         else:
             response = self.load_response(response)
         path = Path(f"./data/mute_lists") if path is None else Path(path)
+        path.mkdir(exist_ok=True, parents=True)
         mute_list, transcript = self.create_mute_list_from_response(response)
         pickle.dump({"mute_list": mute_list, "transcript": transcript},
                     (path / f"{name}.pickle").open("wb"))
@@ -241,7 +252,13 @@ class google_speech_api:
     def create_mute_list_from_response(self, response):
         def convert_to_seconds(word_time):
             # word.start_time
-            start = word_time.seconds + word_time.nanos * 10 ** -9
+            if hasattr(word_time, "nanos"):
+                start = word_time.seconds + word_time.nanos * 10 ** -9
+            elif hasattr(word_time, "microseconds"):
+                start = word_time.seconds+word_time.microseconds*1e-6
+            else:
+                print(word_time, type(word_time))
+                raise Exception("Unrecognized time object")
             return start
 
         print(u"Waiting for operation to complete...")

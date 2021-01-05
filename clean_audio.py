@@ -1,11 +1,33 @@
+import argparse
 import re
 import os, sys
 import delegator
 from google.cloud import storage
+storage.blob._MAX_MULTIPART_SIZE = 5 * 1024* 1024 # 5 MB
+storage.blob._DEFAULT_CHUNKSIZE = 5 * 1024* 1024 # 5 MB
+
 import google_api
 from pathlib import Path
 import utils
 import pickle
+
+"""
+Usage:
+cd D:\Github\cleanvid
+activate web
+python clean_audio.py configs/my_config [--video PATH_TO_VIDEO]
+
+video_path can be specified in the config or in the commandline call
+
+
+try:
+    options = parser.parse_args()
+except:
+    parser.print_help()
+    sys.exit(0)
+    
+"""
+
 
 class CleanProfanity:
     def __init__(self,
@@ -43,6 +65,7 @@ class CleanProfanity:
         if (not storage.Blob(bucket=bucket, name=destination).exists(storage_client)) or overwrite:
             print(f"Uploading {destination}...")
             blob = bucket.blob(f'{destination}')
+            blob.chunk_size = 5 * 1024 * 1024 # Set 5 MB blob size so slower networks don't timeout
             blob.upload_from_filename(str(source))
         else:
             print(f"{destination} already uploaded")
@@ -71,27 +94,35 @@ class CleanProfanity:
             # end_time = "00:00:58"
             # start_time = "01:23:00"
             # end_time = "01:23:13"
-            start_time = "00:04:32"
-            end_time = "00:04:45"
+            start_time = "01:26:20"
+            end_time = "01:26:34"
             overwrite_local = overwrite_cloud = True
             name += "_testing"
-            output_path = Path(f"./temp/{name}")
-            output_path.mkdir(exist_ok=True, parents=True)
-            result, path = utils.trim_video(input=path, output=output_path, start=start_time, end=end_time)
+            uri = (Path(uri).parent / f"{Path(uri).name}_testing").with_suffix(Path(uri).suffix)
+
+            output_folder = Path(f"./temp/{name}")
+            output_folder.mkdir(exist_ok=True, parents=True)
+            output_path = (output_folder / f"{name}{ext}").resolve()
+            # This part doesn't work
+            if not Path(output_path).exists():
+                result, path = utils.trim_video(input=path, output=output_path, start=start_time, end=end_time, ffmpeg_path=self.ffmpeg_path)
+            else:
+                path = output_path
 
         processed_path = Path(f"./temp/{name}")
         processed_path.mkdir(exist_ok=True, parents=True)
-        processed_path = processed_path / name
+        processed_path = (processed_path / f"{name}_processed{ext}").resolve()
         # split - mostly for testing!
         process = utils.process_video if api == "video" else utils.process_audio
 
-        if not Path(processed_path).exists():
-            result, processed_path = process(path, processed_path, overwrite=overwrite_local, **kwargs)
+        if not Path(processed_path).exists() or overwrite_local:
+            result, processed_path = process(path, processed_path, overwrite=overwrite_local, ffmpeg_path=self.ffmpeg_path, **kwargs)
         print("Done processing...")
 
         # upload
         #for vid in Path(main_path).parent.glob(f"*{ext}"):
         prefix = r"gs://remove_profanity_from_movie_project/"
+
         vid = Path(processed_path)
         if uri is not None and prefix in uri:
             uri_name = uri.replace(prefix, "")
@@ -110,7 +141,7 @@ class CleanProfanity:
         # Update
         path = Path(path)
         output = path.parent / (path.stem + "_clean" + path.suffix)
-        utils.create_clean_video(path, final_mute_list, output, testing=testing)
+        utils.create_clean_video(path, final_mute_list, output, testing=testing, ffmpeg_path=self.ffmpeg_path)
 
     def process_saved_operation(self, *args, operation, **kwargs):
         operation = self.speech_api.restore_operation(operation)
@@ -132,12 +163,18 @@ class CleanProfanity:
         print(transcript)
         final_mute_list = utils.create_mute_list(mute_list)
         output = video_path.parent / (video_path.stem + "_clean" + video_path.suffix)
-        utils.create_clean_video(video_path, final_mute_list, output)
+        utils.create_clean_video(video_path, final_mute_list, output, ffmpeg_path=self.ffmpeg_path)
 
 
 if __name__=='__main__':
-    #config = utils.process_config("testing_config.ini")
-    config = utils.process_config("configs/hillbilly")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('config', nargs='?', default='')
+    parser.add_argument('--video', type=str, default='', help='Path to the config file.')
+
+    opts = parser.parse_args()
+    if not opts.config:
+        opts.config = "configs/default_config"
+    config = utils.process_config(opts.config, video_path=opts.video)
 
     cp = CleanProfanity(**config)
 
