@@ -1,3 +1,4 @@
+import subprocess
 import os
 import delegator
 import pickle
@@ -8,6 +9,16 @@ import google_api
 import re
 
 FFMPEG = "ffmpeg "
+
+ROOT = Path(__file__).parent.absolute()
+while True:
+    if ROOT.name != "cleanvid" and ROOT:
+        ROOT = ROOT.parent
+    else:
+        break
+
+def file_exists(path, min_size=1000):
+    return Path(path).exists() and os.path.getsize(path) > min_size
 
 def ffmpeg(func):
     """ Make the appropriate directories, raise error on failure, etc.
@@ -27,7 +38,7 @@ def ffmpeg(func):
             output = Path(input).parent / (Path(input).stem + "_DYN_AUDIO" + Path(input).suffix) # dynamic audio on all
         output = match_suffix(input, output)
 
-        if not output.exists() or overwrite:
+        if not file_exists(output) or overwrite:
             ffmpegResult, output = func(input, output, *args, **kwargs, ffmpeg_path=ffmpeg_path)
             if (ffmpegResult.return_code != 0) or (not os.path.isfile(output)):
                 print(ffmpegResult.err)
@@ -165,30 +176,41 @@ def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="9
     return ffmpegResult, output
 
 
-def process_config(path="./configs/default_config", video_path=""):
+def process_config(path=ROOT / "configs/default_config", video_path="", response_path=""):
     from configparser import ConfigParser
     config = ConfigParser()
+    assert Path(path).exists()
     config.read(path)
     # config["main"]["require_api_confirmation"] = config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
     # config["main"]["testing"] = config.getboolean('main', 'testing')
     my_config = {s: dict(config.items(s)) for s in config.sections()}
     if video_path:
         my_config["main"]["video_path"] = video_path
+    if response_path:
+        my_config["paths"]["load_response_path"] = response_path
+
+    # Make paths relative to root
+    for k,v in my_config["paths"].items():
+        if not Path(v).exists():
+            my_config["paths"][k] = ROOT / v
+
     if not "uri" in my_config["main"]:
+        if "video_path" not in my_config["main"]:
+            raise Exception("Must specify video path in config or process_config argument")
         p = Path(my_config["main"]["video_path"])
         name = re.sub('[^-a-zA-Z_0-9]+', "", re.sub('[. _]+', "_", p.stem))
         my_config["main"]["uri"] = rf"gs://remove_profanity_from_movie_project/{name}{p.suffix}"
     for s in config.sections():
         for key,item in my_config[s].items():
-            if item.lower().strip() == "true":
+            if str(item).lower().strip() == "true":
                 my_config[s][key] = True
-            elif item.lower().strip() == "false":
+            elif str(item).lower().strip() == "false":
                 my_config[s][key] = False
 
         # Put all options on the top level, e.g. get rid of "Main", "paths", etc. sections
         my_config.update(my_config[s].items())
 
-    return edict(my_config)
+    return edict(my_config), config
 
 def create_mute_list(time_list):
     """
@@ -208,7 +230,7 @@ def create_mute_list(time_list):
     return muteTimeList
 
 
-def parse_swears(swears="swears.txt"):
+def parse_swears(swears= ROOT / "swears.txt"):
     with open(swears) as f:
         lines = [line.rstrip('\n').split("|")[0] for line in f]
     return lines
@@ -219,7 +241,7 @@ def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg
     testing = "-to 00:01:00" if testing else ""
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
               f""" -filter_complex "[a:0]{",".join(mute_list)}[a]" {testing}""" + \
-              f""" -metadata:s:a:0 title="Clean",language=eng -metadata:s:a:1 title="Normal" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
+              f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
               f""" "{str(Path(output_path).with_suffix(output_ext))}" """
 
     """
@@ -242,8 +264,17 @@ def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg
         raise ValueError('Could not process %s' % (input_path))
 
 
+def get_length(filename, ffprobe_path=r"ffprobe"):
+    result = subprocess.run([ffprobe_path, "-v", "error", "-show_entries",
+                             "format=duration", "-of",
+                             "default=noprint_wrappers=1:nokey=1", filename],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    return float(result.stdout)
+
+
 if __name__=="__main__":
-    config = process_config(video_path="example/video.mp4")
+    config, _config_parser = process_config(video_path="example/video.mp4")
     print(config.uri)
     #ga = google_api(**config)
     #ga.resume_operation(config.operation_path)

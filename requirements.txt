@@ -5,7 +5,7 @@ pysrt
 delegator.py
 easydict
 pytest
-
+tqdm
 
 google-api-core==1.24.1
 google-api-python-client==1.7.8

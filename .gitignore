@@ -5,7 +5,8 @@ venv/
 credentials/
 vids/
 personal/
-#config
+configs/
+!configs/default_config
 
 *.pyc
 *.srt

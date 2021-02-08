@@ -54,6 +54,8 @@ class google_speech_api:
             "profanity_filter": False
         }
 
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(credential_path)
+
         if api == "speech":
             self.speech_client = self.client = speech_v1.SpeechClient()
             self.speech_config["model"] = "video"  # default OR video, video-style recognition is more expensive
@@ -61,7 +63,7 @@ class google_speech_api:
             self.video_client = self.client = video_v1.VideoIntelligenceServiceClient()
 
         self.require_api_confirmation = require_api_confirmation
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credential_path
+
 
     def serialize_operation(self, future, name):
         now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
@@ -272,6 +274,10 @@ class google_speech_api:
             results = response.results
         transcript = []
         cleaned_transcript = []
+        # Word level stuff
+        # results[294].alternatives[0].words
+        # Alternatives (not word level):
+        # results[294].alternatives[1].transcript
         for result in results:
             for i,alternative in enumerate(result.alternatives):
                 previous_word = previous_start_time = ""

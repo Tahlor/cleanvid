@@ -1,10 +1,12 @@
+import tqdm
 import argparse
 import re
 import os, sys
 import delegator
 from google.cloud import storage
-storage.blob._MAX_MULTIPART_SIZE = 5 * 1024* 1024 # 5 MB
-storage.blob._DEFAULT_CHUNKSIZE = 5 * 1024* 1024 # 5 MB
+BLOB_SIZE = 1 # 5 has worked previously
+storage.blob._MAX_MULTIPART_SIZE = BLOB_SIZE * 1024* 1024 # 5 MB
+storage.blob._DEFAULT_CHUNKSIZE = BLOB_SIZE * 1024* 1024 # 5 MB
 
 import google_api
 from pathlib import Path
@@ -48,7 +50,7 @@ class CleanProfanity:
                                                   **kwargs)
 
 
-    def upload_to_cloud(self, source, destination, overwrite=False):
+    def upload_to_cloud(self, source, destination, overwrite=False, already_processed_okay=True):
         # GO HERE: https://console.cloud.google.com/apis/credentials/serviceaccountkey
         # Choose project, select "owner" account
 
@@ -61,16 +63,51 @@ class CleanProfanity:
         # Browse Bucket: https://console.cloud.google.com/storage/browser/remove_profanity_from_movie_project?forceOnBucketsSortingFiltering=false&project=speech-to-text-1590881833772
         bucket = storage_client.get_bucket("remove_profanity_from_movie_project")
         destination = re.sub("[#\[\]*?]", "_", destination)
-
+        file_already_uploaded=False
         if (not storage.Blob(bucket=bucket, name=destination).exists(storage_client)) or overwrite:
             print(f"Uploading {destination}...")
             blob = bucket.blob(f'{destination}')
-            blob.chunk_size = 5 * 1024 * 1024 # Set 5 MB blob size so slower networks don't timeout
-            blob.upload_from_filename(str(source))
+            blob.chunk_size = BLOB_SIZE * 1024 * 1024 # Set 5 MB (or less) blob size so slower networks don't timeout
+            if False:
+                blob.upload_from_filename(str(source))
+            else:
+                # Has TQDM progress
+                while True:
+                    try:
+                        self.upload_blob(bucket, blob, source=source)
+                        break
+                    except:
+                        pass
         else:
             print(f"{destination} already uploaded")
+            if not already_processed_okay:
+                raise Exception("Previously uploaded!")
+            file_already_uploaded = True
         print("Done uploading")
-        return destination
+
+        return destination, file_already_uploaded
+
+    def upload_blob(self, bucket, blob, source):
+        """
+        upload_blob(storage.Client(), "bucket", "/etc/motd", "/path/to/blob.txt", "text/plain")
+
+        Args:
+            bucket_name:
+            source:
+            dest:
+            content_type:
+
+        Returns:
+
+        """
+        with open(source, "rb") as in_file:
+            total_bytes = os.fstat(in_file.fileno()).st_size
+            with tqdm.tqdm.wrapattr(in_file, "read", total=total_bytes, miniters=1, desc="upload to %s" % bucket.name) as file_obj:
+                blob.upload_from_file(
+                    file_obj,
+                    size=total_bytes,
+                )
+                return blob
 
     def main(self,
              path,
@@ -83,6 +120,7 @@ class CleanProfanity:
              api="video",
              operation=None,
              uri=None,
+             already_processed_okay=True,
              **kwargs):
 
         ext = f".{self.codec}"
@@ -115,8 +153,9 @@ class CleanProfanity:
         # split - mostly for testing!
         process = utils.process_video if api == "video" else utils.process_audio
 
-        if not Path(processed_path).exists() or overwrite_local:
+        if (not utils.file_exists(processed_path)) or overwrite_local:
             result, processed_path = process(path, processed_path, overwrite=overwrite_local, ffmpeg_path=self.ffmpeg_path, **kwargs)
+            print("File size:", os.path.getsize(processed_path))
         print("Done processing...")
 
         # upload
@@ -129,8 +168,14 @@ class CleanProfanity:
         else:
             uri_name = str(Path(vid.parent.name)) / vid.name
 
-        destination = self.upload_to_cloud(vid, uri_name, overwrite=overwrite_cloud)
+        destination, file_already_uploaded = self.upload_to_cloud(vid, uri_name, overwrite=overwrite_cloud, already_processed_okay=already_processed_okay)
+        if file_already_uploaded:
+            cont = input("File already uploaded; continue with speech API process request? Y/n " )
+            if cont.lower() != "y":
+                return False
+
         uri = f"{prefix}{destination}"
+
         proto_mute_list, transcript = self.speech_api.process_speech(uri, name=name, operation=operation)
 
         final_mute_list = utils.create_mute_list(proto_mute_list)
@@ -142,6 +187,7 @@ class CleanProfanity:
         path = Path(path)
         output = path.parent / (path.stem + "_clean" + path.suffix)
         utils.create_clean_video(path, final_mute_list, output, testing=testing, ffmpeg_path=self.ffmpeg_path)
+        return True
 
     def process_saved_operation(self, *args, operation, **kwargs):
         operation = self.speech_api.restore_operation(operation)
@@ -163,18 +209,27 @@ class CleanProfanity:
         print(transcript)
         final_mute_list = utils.create_mute_list(mute_list)
         output = video_path.parent / (video_path.stem + "_clean" + video_path.suffix)
-        utils.create_clean_video(video_path, final_mute_list, output, ffmpeg_path=self.ffmpeg_path)
-
+        if final_mute_list:
+            utils.create_clean_video(video_path, final_mute_list, output, ffmpeg_path=self.ffmpeg_path)
+        else:
+            print("No profanity detected :/")
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config', nargs='?', default='')
-    parser.add_argument('--video', type=str, default='', help='Path to the config file.')
-
+    parser.add_argument('--video', type=str, default='', help='Path to the video file.')
+    parser.add_argument('--response', type=str, default='', help='Path to response file.')
+    output_config = None
     opts = parser.parse_args()
     if not opts.config:
         opts.config = "configs/default_config"
-    config = utils.process_config(opts.config, video_path=opts.video)
+        output_config = f"configs/{Path(opts.video).stem}"
+    config, _config_parser = utils.process_config(opts.config, video_path=opts.video, response_path=opts.response)
+
+    if not output_config is None:
+        with open(output_config, 'w') as configfile:    # save
+            _config_parser.write(configfile)
+
 
     cp = CleanProfanity(**config)
 

@@ -17,24 +17,31 @@ VidClean is tool to mute profanity in video files:
 2. [`ffmpeg`](https://www.ffmpeg.org/) is used to create a cleaned video file, intall it.
 3. Configure the...config. At a minimum, the path to the video and credential json are required. 
 
+## Run
+    python D:\Github\cleanvid\clean_audio.py --video [path]
+    or
+    python "D:\Github\cleanvid\clean_audio.py" /config/path
+
 ## To Do: 
 * Expand to filter graphic content using "Cloud Video Intelligence API"
 * Alternatively, use subtitles + forced alignment, or some opensource alternative.
 
 ## Resources:
-Free Trial:
+* Free Trial:
     https://console.cloud.google.com/freetrial/signup/tos
 
-Cloud Storage:
+* Cloud Storage:
     https://console.cloud.google.com/storage/browser?pli=1
 
-Video: 
-    Billing: https://cloud.google.com/video-intelligence/pricing
-    Info: https://cloud.google.com/video-intelligence/docs/analyze-safesearch
-Audio: 
-    Billing: https://cloud.google.com/speech-to-text/pricing
-    Info: https://cloud.google.com/speech-to-text/docs/
+* Video:
+    * Billing: https://cloud.google.com/video-intelligence/pricing   
+    * Info: https://cloud.google.com/video-intelligence/docs/analyze-safesearch
+* Audio: 
+    * Billing: https://cloud.google.com/speech-to-text/pricing
+    * Info: https://cloud.google.com/speech-to-text/docs/
  
+* Billing:
+      https://console.cloud.google.com/billing/01CBB0-9C1093-FE2844?project=speech-to-text-1590881833772
 ## License
 
 This project is licensed under the Apache License, v2.0 - see the [LICENSE](LICENSE) file for details.
