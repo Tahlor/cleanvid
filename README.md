@@ -41,7 +41,8 @@ VidClean is tool to mute profanity in video files:
     * Info: https://cloud.google.com/speech-to-text/docs/
  
 * Billing:
-      https://console.cloud.google.com/billing/01CBB0-9C1093-FE2844?project=speech-to-text-1590881833772
+    * https://console.cloud.google.com/billing
+
 ## License
 
 This project is licensed under the Apache License, v2.0 - see the [LICENSE](LICENSE) file for details.

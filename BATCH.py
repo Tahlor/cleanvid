@@ -23,7 +23,7 @@ def process_batch_list(batch_list, config, video_path):
             batch_list = f.read().strip().replace("'","").replace('"',"").split("\n")
 
     UTILIZATION = load_utilization()
-    #print(UTILIZATION)
+    print(f"Utilization for {MONTH}: {UTILIZATION[MONTH]}")
     #UTILIZATION[MONTH] = 480*60
 
     # load list
