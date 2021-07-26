@@ -1,3 +1,4 @@
+import traceback
 import warnings
 import argparse
 import pickle
@@ -21,16 +22,21 @@ def process_batch_list(batch_list, config, video_path):
     else:
         with Path(batch_list).open("r") as f:
             batch_list = f.read().strip().replace("'","").replace('"',"").split("\n")
-
+    print(f"Batch {batch_list}")
     UTILIZATION = load_utilization()
     print(f"Utilization for {MONTH}: {UTILIZATION[MONTH]}")
     #UTILIZATION[MONTH] = 480*60
 
     # load list
     for item in batch_list:
+		# Skip commented ones
+        if item[0].strip()=="#":
+            print(f"skipping {item}")
+            continue
         if UTILIZATION[MONTH] > MAX_UTILIZATION:
             warnings.warn("MAX utilization reached")
             break
+        print(f"Checking if {item} exists...")
         item = search_folder_for_video(item)
         if item:
             print("Working on ", Path(item).name)
@@ -38,7 +44,7 @@ def process_batch_list(batch_list, config, video_path):
             total_length = utils.get_length(item, Path(config.ffmpeg_path).parent/"ffprobe")
             total_length = round(total_length+7.49,15)
             if total_length > 1200: # should be longer than 20 minutes
-                success = process_item(config)
+                success = process_item(config, _config_parser)
                 if success:
                     UTILIZATION[MONTH] += total_length
             else:
@@ -50,30 +56,41 @@ def process_batch_list(batch_list, config, video_path):
     save_utilization(UTILIZATION)
 
 def search_folder_for_video(folder):
-    if Path(folder).suffix in video_extensions:
+    if Path(folder).suffix in [x.replace("*","") for x in video_extensions]:
+        print(f"{folder} is video path")
+        if clean_exists(folder):
+            return False
         return folder
     else:
         for ext in video_extensions:
             for i in Path(str(folder).lower()).rglob(ext):
-                if "_clean" in i.name.lower() or (i.parent / (i.stem + "_clean" + i.suffix)).exists() :
+                if clean_exists(i):
                     print("Clean version detected", i.name)
                     return False
                 if "sample" not in i.name:
                     return i
         return False
 
-def process_item(config):
+def clean_exists(i):
+    i = Path(i)
+    if "_clean" in i.name.lower() or (i.parent / (i.stem + "_clean" + i.suffix)).exists():
+        print("Clean version detected", i.name)
+        return True
+    return False
+
+def process_item(config, _config_parser):
     try:
-        cp = clean_audio.CleanProfanity(**config)
-        return cp.main(config.video_path,
-                overwrite_cloud=config.overwrite.overwrite_cloud,
-                overwrite_local=config.overwrite.overwrite_ffmpeg_files,
-                testing=config.testing,
-                blank_video=config.blank_video,
-                uri=config.uri,
-                already_processed_okay=False)
+        clean_audio.manager(config, _config_parser, output_config=None)
+        # cp = clean_audio.CleanProfanity(**config)
+        # return cp.main(config.video_path,
+        #         overwrite_cloud=config.overwrite.overwrite_cloud,
+        #         overwrite_local=config.overwrite.overwrite_ffmpeg_files,
+        #         testing=config.testing,
+        #         blank_video=config.blank_video,
+        #         uri=config.uri,
+        #         already_processed_okay=False)
     except Exception as e:
-        print(e)
+        traceback.print_exc()
         return False
 
 def load_utilization():
@@ -100,6 +117,10 @@ if __name__=='__main__':
     parser.add_argument('--video', type=str, default='', help='Path to the video')
 
     opts = parser.parse_args()
+
+    # For resuming from an operation / response
+    # opts.config = "configs/RESUME"
+
     if not opts.config:
         opts.config = "configs/default_config"
 

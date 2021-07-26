@@ -237,10 +237,13 @@ def parse_swears(swears= ROOT / "swears.txt"):
 
 def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg_path="ffmpeg "):
     output_ext = Path(input_path).suffix
-
+    mute_list_file = output_path.parent / (output_path.stem + "_MUTE.txt")
     testing = "-to 00:01:00" if testing else ""
+    formatted_mute_list = f"""[a:0]{",".join(mute_list)}[a]"""
+    with mute_list_file.open("w") as f:
+        f.write(formatted_mute_list)
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
-              f""" -filter_complex "[a:0]{",".join(mute_list)}[a]" {testing}""" + \
+              f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \
               f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
               f""" "{str(Path(output_path).with_suffix(output_ext))}" """
 
@@ -262,7 +265,7 @@ def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg
     if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
         print(ffmpegResult.err)
         raise ValueError('Could not process %s' % (input_path))
-
+    os.remove(mute_list_file)
 
 def get_length(filename, ffprobe_path=r"ffprobe"):
     result = subprocess.run([ffprobe_path, "-v", "error", "-show_entries",

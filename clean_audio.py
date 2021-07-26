@@ -161,18 +161,24 @@ class CleanProfanity:
         # upload
         #for vid in Path(main_path).parent.glob(f"*{ext}"):
         prefix = r"gs://remove_profanity_from_movie_project/"
+        prefix_regex = "gs:[\\/]+remove_profanity_from_movie_project[\\/]+"
 
         vid = Path(processed_path)
-        if uri is not None and prefix in uri:
-            uri_name = uri.replace(prefix, "")
+        if uri is not None and prefix[5:-1] in str(uri):
+            #uri_name = uri.replace(prefix, "")
+            #re.sub(prefix_regex, "", str(uri))
+            uri_name = Path(uri).name
         else:
             uri_name = str(Path(vid.parent.name)) / vid.name
 
         destination, file_already_uploaded = self.upload_to_cloud(vid, uri_name, overwrite=overwrite_cloud, already_processed_okay=already_processed_okay)
         if file_already_uploaded:
-            cont = input("File already uploaded; continue with speech API process request? Y/n " )
-            if cont.lower() != "y":
-                return False
+            if operation is None:
+                cont = input("File already uploaded; continue with speech API process request? Y/n " )
+                if cont.lower() != "y":
+                    return False
+            else:
+                print("Loading previous operation")
 
         uri = f"{prefix}{destination}"
 
@@ -214,22 +220,14 @@ class CleanProfanity:
         else:
             print("No profanity detected :/")
 
-if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('config', nargs='?', default='')
-    parser.add_argument('--video', type=str, default='', help='Path to the video file.')
-    parser.add_argument('--response', type=str, default='', help='Path to response file.')
-    output_config = None
-    opts = parser.parse_args()
-    if not opts.config:
-        opts.config = "configs/default_config"
-        output_config = f"configs/{Path(opts.video).stem}"
-    config, _config_parser = utils.process_config(opts.config, video_path=opts.video, response_path=opts.response)
+def manager(config, _config_parser, output_config=None):
+    if output_config is None:
+        video = config.main.video_path
+        output_config = f"configs/{Path(video).stem}"
 
     if not output_config is None:
         with open(output_config, 'w') as configfile:    # save
             _config_parser.write(configfile)
-
 
     cp = CleanProfanity(**config)
 
@@ -238,17 +236,30 @@ if __name__=='__main__':
         cp.process_saved_response(config.video_path, response_path=config.load_response_path)
     elif "load_operation_path" in config.keys() and config.load_operation_path:
         cp.process_saved_operation(config.video_path,
-                                    overwrite_cloud=config.overwrite.overwrite_cloud,
-                                    overwrite_local=config.overwrite.overwrite_ffmpeg_files,
-                                    testing=config.testing,
-                                    blank_video=config.blank_video,
-                                    operation=config.load_operation_path,
-                                    uri=config.uri)
+                               overwrite_cloud=config.overwrite.overwrite_cloud,
+                               overwrite_local=config.overwrite.overwrite_ffmpeg_files,
+                               testing=config.testing,
+                               blank_video=config.blank_video,
+                               operation=config.load_operation_path,
+                               uri=config.uri)
     else:
         # Do new proccess
         cp.main(config.video_path,
-                overwrite_cloud=config.overwrite.overwrite_cloud,
-                overwrite_local=config.overwrite.overwrite_ffmpeg_files,
-                testing=config.testing,
-                blank_video=config.blank_video,
-                uri=config.uri)
+            overwrite_cloud=config.overwrite.overwrite_cloud,
+            overwrite_local=config.overwrite.overwrite_ffmpeg_files,
+            testing=config.testing,
+            blank_video=config.blank_video,
+            uri=config.uri)
+
+
+if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('config', nargs='?', default='')
+    parser.add_argument('--video', type=str, default='', help='Path to the video file.')
+    parser.add_argument('--response', type=str, default='', help='Path to response file.')
+    opts = parser.parse_args()
+    if not opts.config:
+        opts.config = "configs/default_config"
+        output_config = None
+    config, _config_parser = utils.process_config(opts.config, video_path=opts.video, response_path=opts.response)
+    manager(config, _config_parser, output_config=output_config)

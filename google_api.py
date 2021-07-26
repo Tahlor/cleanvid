@@ -71,9 +71,8 @@ class google_speech_api:
         #     operation = future._pb
         # else:
         #     operation = future.operation
-        operation = future.operation
+        operation_json = json_format.MessageToJson(future.operation)
         # Convert operation protobuf message to JSON-formatted string
-        operation_json = json_format.MessageToJson(operation)
         output_path = Path(f"./data/google_api/{name}_{now}.operation").resolve()
         output_path.parent.mkdir(exist_ok=True,parents=True)
         json.dump(operation_json, Path(f"./data/google_api/{name}_{now}.operation").open("w"))
@@ -81,12 +80,19 @@ class google_speech_api:
 
     def serialize_response(self, response, name):
         now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
+        response_path = Path(f"./data/google_api/{name}_{now}.response")
         try:
             operation_json = json_format.MessageToJson(response)
         except: # video_intelligence.AnnotateVideoResponse
             response = response._pb
             operation_json = json_format.MessageToJson(response)
-        json.dump(operation_json, Path(f"./data/google_api/{name}_{now}.response").open("w"))
+        badjuju = """"@type": "type.googleapis.com/google.cloud.videointelligence.v1.AnnotateVideoResponse","""
+        if badjuju in operation_json:
+            operation_json = operation_json.replace(badjuju, "")
+            json.dump(operation_json, response_path.open("w"))
+            response = self.load_response(response_path)
+        else:
+            json.dump(operation_json, response_path.open("w"))
         return response
 
     def restore_operation(self, json_path):
@@ -103,19 +109,27 @@ class google_speech_api:
         operation = json_format.Parse(operation_json, operations_pb2.Operation())
 
         # load operation from backing store
+
+        """
+                operation,
+        refresh,
+        cancel,
+        result_type,
+        """
+
         if self.api=="speech":
             future = from_gapic(
-                operation,
-                self.client.transport._operations_client,
-                cloud_speech_pb2.LongRunningRecognizeResponse,
+                operation=operation,
+                operations_client=self.client.transport._operations_client,
+                result_type=cloud_speech_pb2.LongRunningRecognizeResponse,
                 metadata_type=cloud_speech_pb2.LongRunningRecognizeMetadata
             )
         else:
             future = from_gapic(
-                operation,
-                self.client.transport.operations_client,
-                _video_intelligence.AnnotateVideoResponse,
-                #metadata_type=_video_intelligence.Ann
+                operation=operation,
+                operations_client=self.client.transport.operations_client,
+                result_type=_video_intelligence.AnnotateVideoResponse,
+                #metadata_type=_video_intelligence.
             )
 
         # operation = video_client.annotate_video(
@@ -145,6 +159,7 @@ class google_speech_api:
                     done = True
 
             except Exception as e:
+                print("TRYING SOMETHING ELSE")
                 try:
                     if hasattr(operation.metadata, "progress_percent"):
                         print(f"No response...trying again {operation.metadata.progress_percent}%")
@@ -270,6 +285,8 @@ class google_speech_api:
         mute_list = []
         if "Annotate" in str(type(response)):
             results = [x for x in response.annotation_results[0].speech_transcriptions]
+        #elif "Any" in str(type(response)):
+
         else:
             results = response.results
         transcript = []
@@ -316,7 +333,6 @@ class google_speech_api:
             response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
         elif self.api == "video":
             response = json_format.Parse(response_json, _video_intelligence.AnnotateVideoResponse()._pb)
-
         return response
 
     def load_operation(self, json_path):
