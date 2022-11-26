@@ -146,7 +146,9 @@ class google_speech_api:
             operation = self.restore_operation(Path(f"./data/google_api/{name}.operation"))
         done = False
 
+        i = 0
         while not done:
+            i += 1
             print("Waiting for response...")
             try:
                 response = operation.result(timeout=60)
@@ -159,6 +161,8 @@ class google_speech_api:
                     done = True
 
             except Exception as e:
+                if i > 30 and i % 10 == 0:
+                    print(e)
                 print("TRYING SOMETHING ELSE")
                 try:
                     if hasattr(operation.metadata, "progress_percent"):

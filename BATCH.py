@@ -6,9 +6,14 @@ import clean_audio
 import utils
 from pathlib import Path
 from datetime import datetime
+import logging
+import my_logging
+
+#logger = logging.getLogger("root." + __name__)
+logger = my_logging.setup_logging("./logs", log_name="batch_", datefmt="%m-%d-%Y %H:%M:%S")
 
 today = datetime.today()
-MONTH = datetime(today.year, today.month, 1).strftime("%B")
+MONTH = datetime(today.year, today.month, 1).strftime("%Y %B")
 video_extensions = ["*.mp4","*.avi", "*.mkv", "*.m4v"]
 UTILIZATION = {}
 MAX_UTILIZATION = 60*1000
@@ -37,18 +42,21 @@ def process_batch_list(batch_list, config, video_path):
             warnings.warn("MAX utilization reached")
             break
         print(f"Checking if {item} exists...")
-        item = search_folder_for_video(item)
-        if item:
-            print("Working on ", Path(item).name)
-            config, _config_parser = utils.process_config(opts.config, video_path=item)
-            total_length = utils.get_length(item, Path(config.ffmpeg_path).parent/"ffprobe")
+        full_item = search_folder_for_video(item)
+        if full_item:
+            print("Working on ", Path(full_item).name)
+            config, _config_parser = utils.process_config(opts.config, video_path=full_item)
+            total_length = utils.get_length(full_item, Path(config.ffmpeg_path).parent/"ffprobe")
             total_length = round(total_length+7.49,15)
             if total_length > 1200: # should be longer than 20 minutes
                 success = process_item(config, _config_parser)
                 if success:
+                    print("SUCCESS")
                     UTILIZATION[MONTH] += total_length
+                else:
+                    print("NOT SUCCESS")
             else:
-                print(item, "less than 1000 seconds, skipping", total_length)
+                print(full_item, "less than 1000 seconds, skipping", total_length)
         else:
             print(item, "not found")
 
@@ -89,6 +97,7 @@ def process_item(config, _config_parser):
         #         blank_video=config.blank_video,
         #         uri=config.uri,
         #         already_processed_okay=False)
+        return True
     except Exception as e:
         traceback.print_exc()
         return False
@@ -118,9 +127,11 @@ if __name__=='__main__':
 
     opts = parser.parse_args()
 
-    # For resuming from an operation / response
+    # For resuming from an operation / response, just updue the response file in configs/RESUME
     # opts.config = "configs/RESUME"
 
+    if "RESUME" in opts.config:
+        warnings.warn("Using config to RESUME previous operation")
     if not opts.config:
         opts.config = "configs/default_config"
 

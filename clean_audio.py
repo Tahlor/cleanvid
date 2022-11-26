@@ -192,31 +192,35 @@ class CleanProfanity:
         # Update
         path = Path(path)
         output = path.parent / (path.stem + "_clean" + path.suffix)
-        utils.create_clean_video(path, final_mute_list, output, testing=testing, ffmpeg_path=self.ffmpeg_path)
+        utils.create_clean_video(path, output, final_mute_list, testing=testing, ffmpeg_path=self.ffmpeg_path)
         return True
 
     def process_saved_operation(self, *args, operation, **kwargs):
         operation = self.speech_api.restore_operation(operation)
         return self.main(*args, operation=operation, **kwargs)
 
-    def process_saved_response(self, video_path, response_path, name=None, output_path=None):
+    def process_response_to_mute_list(self, video_path, response_path, name=None, mute_list_output_path=None):
         # if name is None:
         #     name = Path(response_path)
         #     name = response_path.split("000")[0]
         # if name.endswith(".response"):
         #     name = name[:-len(".response")]
         video_path = Path(video_path)
-        if output_path is None:
-            output_path = Path(response_path).parent
+        if mute_list_output_path is None:
+            mute_list_output_path = Path(response_path).parent
         name = Path(response_path).stem
         response = self.speech_api.load_response(response_path)
         mute_list, transcript = self.speech_api.create_mute_list_from_response(response)
-        pickle.dump({"mute_list": mute_list, "transcript": transcript}, (output_path / f"{name}.pickle").open("wb"))
+        pickle.dump({"mute_list": mute_list, "transcript": transcript}, (mute_list_output_path / f"{name}.pickle").open("wb"))
         print(transcript)
         final_mute_list = utils.create_mute_list(mute_list)
+        return final_mute_list
+
+    def process_saved_response(self, video_path, response_path, name=None, mute_list_output_path=None):
+        final_mute_list = self.process_response_to_mute_list(video_path, response_path, name, mute_list_output_path)
         output = video_path.parent / (video_path.stem + "_clean" + video_path.suffix)
         if final_mute_list:
-            utils.create_clean_video(video_path, final_mute_list, output, ffmpeg_path=self.ffmpeg_path)
+            utils.create_clean_video(video_path, output, final_mute_list, ffmpeg_path=self.ffmpeg_path)
         else:
             print("No profanity detected :/")
 
@@ -233,9 +237,9 @@ def manager(config, _config_parser, output_config=None):
 
     if "load_response_path" in config.keys() and config.load_response_path:
         # Process previous response
-        cp.process_saved_response(config.video_path, response_path=config.load_response_path)
+        return cp.process_saved_response(config.video_path, response_path=config.load_response_path)
     elif "load_operation_path" in config.keys() and config.load_operation_path:
-        cp.process_saved_operation(config.video_path,
+        return cp.process_saved_operation(config.video_path,
                                overwrite_cloud=config.overwrite.overwrite_cloud,
                                overwrite_local=config.overwrite.overwrite_ffmpeg_files,
                                testing=config.testing,
@@ -244,7 +248,7 @@ def manager(config, _config_parser, output_config=None):
                                uri=config.uri)
     else:
         # Do new proccess
-        cp.main(config.video_path,
+        return cp.main(config.video_path,
             overwrite_cloud=config.overwrite.overwrite_cloud,
             overwrite_local=config.overwrite.overwrite_ffmpeg_files,
             testing=config.testing,

@@ -235,42 +235,66 @@ def parse_swears(swears= ROOT / "swears.txt"):
         lines = [line.rstrip('\n').split("|")[0] for line in f]
     return lines
 
-def create_clean_video(input_path, mute_list, output_path, testing=False, ffmpeg_path="ffmpeg "):
-    output_ext = Path(input_path).suffix
-    mute_list_file = output_path.parent / (output_path.stem + "_MUTE.txt")
-    testing = "-to 00:01:00" if testing else ""
+def format_mute_list(mute_list, mute_list_file):
     formatted_mute_list = f"""[a:0]{",".join(mute_list)}[a]"""
-    with mute_list_file.open("w") as f:
-        f.write(formatted_mute_list)
+    if mute_list_file:
+        # if Path(mute_list_file).exists():
+        #     input("Mute list file exists, overwrite?")
+        with mute_list_file.open("w") as f:
+            f.write(formatted_mute_list)
+    return formatted_mute_list
+
+def create_clean_video_command(input_path, output_path, mute_list=None, testing=False, ffmpeg_path="ffmpeg ", mute_list_file=None):
+    output_ext = Path(input_path).suffix
+    if mute_list_file is None:
+        mute_list_file = output_path.parent / (output_path.stem + "_MUTE.txt")
+        formatted_mute_list = format_mute_list(mute_list,mute_list_file)
+    testing = "-to 00:01:00" if testing else ""
+
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
               f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \
               f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
+              f"""-disposition:a:0 default""" + \
               f""" "{str(Path(output_path).with_suffix(output_ext))}" """
 
-    """
+    r"""
     -y – A global option to overwrite the output file if it already exists.
     -map 0:v – Designate the video stream(s) from the first input as a source for the output file.
     -c:v copy – Stream copy the video. This just muxes the input to the output. No re-encoding occurs.
     -map 0:a – Designate the audio stream(s) from the first input as a source for the output file.
     -c:a copy – Stream copy the audio. This just muxes the input to the output. No re-encoding occurs.
     -strict -2 -c:a aac – Use the native FFmpeg AAC audio encoder. -strict -2 is required as a way that you acknowledge that the encoder is designated as experimental. It is not a great encoder, but it is not too bad at higher bitrates.
+    -disposition:a:0 default first stream is default audio track
+    -c copy - copy only default streams
+    -map 0 - copy all streams
+
+    # CHANGE TO DEFAULT CLEAN AUDIO TRACK (sample)
+    ffmpeg -i "J:\Media\Videos\Movies\Unorganized\Apollo.13.1995.REMASTERED.1080p.BluRay.x265-RARBG\Apollo.13.1995_clean.mp4"  -ss 00:21:00 -to 00:21:20 -c copy -map 0 -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -disposition:a:0 default  "J:\Media\Videos\Movies\Unorganized\Apollo.13.1995.REMASTERED.1080p.BluRay.x265-RARBG\Apollo.13.1995_clean2.mp4"
 
     """
 
     # "ffmpeg -i video -c:v copy -af volume=0:enable='between(t,60,100)+between(t,330,370)+between(t,465,541.3)' out.mp4"
 
     print(command)
+    return command, mute_list_file
+
+def create_clean_video(input_path, output_path, mute_list, testing=False, ffmpeg_path="ffmpeg ", clean_mute_list=False):
+    command, mute_list_file = create_clean_video_command(input_path, output_path, mute_list, testing, ffmpeg_path)
     ffmpegResult = delegator.run(command,
                                  block=True)
     if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
         print(ffmpegResult.err)
         raise ValueError('Could not process %s' % (input_path))
-    os.remove(mute_list_file)
+
+    if clean_mute_list:
+        os.remove(mute_list_file)
 
 def get_length(filename, ffprobe_path=r"ffprobe"):
-    result = subprocess.run([ffprobe_path, "-v", "error", "-show_entries",
-                             "format=duration", "-of",
-                             "default=noprint_wrappers=1:nokey=1", filename],
+    command = [str(ffprobe_path), "-v", "error", "-show_entries",
+               "format=duration", "-of",
+               "default=noprint_wrappers=1:nokey=1", str(filename)]
+    print(" ".join(command))
+    result = subprocess.run(command,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     return float(result.stdout)

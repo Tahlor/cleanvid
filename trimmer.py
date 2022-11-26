@@ -20,14 +20,12 @@ from pathlib import Path
 import os
 import subprocess
 import shutil
-input_file = "J:\Media\Videos\Misc Videos\msc\The Matrix Reloaded (2003) [1080p]\The.Matrix.Reloaded.2003.1080p.BrRip.x264.YIFY_clean.mp4"
-#input_file = "J:\Media\Videos\Misc Videos\msc\The Matrix Reloaded (2003) [1080p]\The.Matrix.Reloaded.2003.1080p.BrRip.x264.YIFY.mp4"
-#input_file = "J:\Media\Videos\Misc Videos\msc\Goodfellas\Goodfellas R (1990).avi"
+input_file = "J:\Media\Videos\Misc Videos\msc\Twenty Bucks 1993 DVDRIP XVID[SN]\Twenty Bucks 1993 DVDRIP XVID_clean.avi"
 
 list_of_cuts=[
-    ("28:08","32:18"),
+    ("14:09","20:46"),
 ]
-ffmpeg = r"C:\ffmpeg-4.2.2-win64-static\ffmpeg-4.2.2-win64-static\bin\ffmpeg.exe"
+ffmpeg = r"C:\ffmpeg\ffmpeg.exe"
 temp_dir_name = "temp_movie_cutting"
 RUN_COMMANDS=True
 DELETE_FOLDER = False
