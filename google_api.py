@@ -40,6 +40,7 @@ class google_speech_api:
                  sample_rate=44100,
                  require_api_confirmation=True,
                  api="speech",  # speech, video
+                 config=None,
                  **kwargs
                  ):
         self.swears = utils.parse_swears()
@@ -63,7 +64,7 @@ class google_speech_api:
             self.video_client = self.client = video_v1.VideoIntelligenceServiceClient()
 
         self.require_api_confirmation = require_api_confirmation
-
+        self.response_output_folder = config.api_response_root if config is not None else Path("./data/google_api")
 
     def serialize_operation(self, future, name):
         now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
@@ -73,14 +74,15 @@ class google_speech_api:
         #     operation = future.operation
         operation_json = json_format.MessageToJson(future.operation)
         # Convert operation protobuf message to JSON-formatted string
-        output_path = Path(f"./data/google_api/{name}_{now}.operation").resolve()
+
+        output_path = Path(f"{self.response_output_folder}/{name}_{now}.operation").resolve()
         output_path.parent.mkdir(exist_ok=True,parents=True)
-        json.dump(operation_json, Path(f"./data/google_api/{name}_{now}.operation").open("w"))
+        json.dump(operation_json, Path(f"{self.response_output_folder}/{name}_{now}.operation").open("w"))
         return operation_json
 
     def serialize_response(self, response, name):
         now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
-        response_path = Path(f"./data/google_api/{name}_{now}.response")
+        response_path = Path(f"{self.response_output_folder}/{name}_{now}.response")
         try:
             operation_json = json_format.MessageToJson(response)
         except: # video_intelligence.AnnotateVideoResponse
@@ -143,7 +145,7 @@ class google_speech_api:
 
     def get_response(self, operation=None, name=None):
         if operation is None:
-            operation = self.restore_operation(Path(f"./data/google_api/{name}.operation"))
+            operation = self.restore_operation(Path(f"{self.response_output_folder}/{name}.operation"))
         done = False
 
         i = 0

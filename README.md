@@ -18,9 +18,9 @@ VidClean is tool to mute profanity in video files:
 3. Configure the...config. At a minimum, the path to the video and credential json are required. 
 
 ## Run
-    python D:\Github\cleanvid\clean_audio.py --video [path]
+    python D:\Github\cleanvid\MAIN.py --video [path]
     or
-    python "D:\Github\cleanvid\clean_audio.py" /config/path
+    python "D:\Github\cleanvid\MAIN.py" /config/path
 
 ## To Do: 
 * Expand to filter graphic content using "Cloud Video Intelligence API"

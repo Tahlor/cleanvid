@@ -48,12 +48,16 @@ def strip_ads(path):
                 dropped.append(line)
     print(dropped, path)
 
-#root = input("Subtitle root directory: ") # "%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
-root = r"%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
-root = r"C:\Users\Taylor\AppData\Local\Plex Media Server\Media"
-print(Path(root).resolve())
-for path in Path(root).rglob("*.srt"):
-    try:
-        strip_ads(path)
-    except:
-        pass
+
+if __name__=='__main__':
+    #root = input("Subtitle root directory: ") # "%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
+    root = r"%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
+    root = r"C:\Users\Taylor\AppData\Local\Plex Media Server\Media"
+    root = "J:\Media\Videos"
+    print(Path(root).resolve())
+
+    for path in Path(root).rglob("*.srt"):
+        try:
+            strip_ads(path)
+        except:
+            pass

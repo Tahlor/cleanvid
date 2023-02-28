@@ -2,7 +2,7 @@ import traceback
 import warnings
 import argparse
 import pickle
-import clean_audio
+import MAIN
 import utils
 from pathlib import Path
 from datetime import datetime
@@ -42,23 +42,26 @@ def process_batch_list(batch_list, config, video_path):
             warnings.warn("MAX utilization reached")
             break
         print(f"Checking if {item} exists...")
-        full_item = search_folder_for_video(item)
-        if full_item:
-            print("Working on ", Path(full_item).name)
-            config, _config_parser = utils.process_config(opts.config, video_path=full_item)
-            total_length = utils.get_length(full_item, Path(config.ffmpeg_path).parent/"ffprobe")
-            total_length = round(total_length+7.49,15)
-            if total_length > 1200: # should be longer than 20 minutes
-                success = process_item(config, _config_parser)
-                if success:
-                    print("SUCCESS")
-                    UTILIZATION[MONTH] += total_length
+        full_items = list(search_folder_for_video(item))
+        for full_item in full_items:
+            if full_item:
+                print("Working on ", Path(full_item).name)
+                config, _config_parser = utils.process_config(opts.config, video_path=full_item)
+                total_length = utils.get_length(full_item, Path(config.ffmpeg_path).parent/"ffprobe")
+                total_length = round(total_length+7.49,15)
+                if total_length > 1200: # should be longer than 20 minutes
+                    success = process_item(config, _config_parser)
+                    if success:
+                        print("SUCCESS")
+                    if config.google_api_request_made:
+                        print(f"Adding to utilization {total_length}")
+                        UTILIZATION[MONTH] += total_length
+                    else:
+                        print("NOT SUCCESS")
                 else:
-                    print("NOT SUCCESS")
+                    print(full_item, "less than 1000 seconds, skipping", total_length)
             else:
-                print(full_item, "less than 1000 seconds, skipping", total_length)
-        else:
-            print(item, "not found")
+                print(item, "not found")
 
     print("New Utilization", MONTH, UTILIZATION[MONTH])
     save_utilization(UTILIZATION)
@@ -68,28 +71,28 @@ def search_folder_for_video(folder):
         print(f"{folder} is video path")
         if clean_exists(folder):
             return False
-        return folder
+        yield folder
     else:
         for ext in video_extensions:
             for i in Path(str(folder).lower()).rglob(ext):
                 if clean_exists(i):
-                    print("Clean version detected", i.name)
-                    return False
-                if "sample" not in i.name:
-                    return i
-        return False
+                    #)print("Clean version detected for:", i.name)
+                    yield False
+                elif "sample" not in i.name:
+                    yield i
+
 
 def clean_exists(i):
     i = Path(i)
     if "_clean" in i.name.lower() or (i.parent / (i.stem + "_clean" + i.suffix)).exists():
-        print("Clean version detected", i.name)
+        print("Clean version detected for:", i.name)
         return True
     return False
 
 def process_item(config, _config_parser):
     try:
-        clean_audio.manager(config, _config_parser, output_config=None)
-        # cp = clean_audio.CleanProfanity(**config)
+        MAIN.manager(config, _config_parser, output_config=None)
+        # cp = MAIN.CleanProfanity(**config)
         # return cp.main(config.video_path,
         #         overwrite_cloud=config.overwrite.overwrite_cloud,
         #         overwrite_local=config.overwrite.overwrite_ffmpeg_files,

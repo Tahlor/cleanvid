@@ -1,3 +1,4 @@
+import json
 import subprocess
 import os
 import delegator
@@ -7,6 +8,7 @@ from pathlib import Path
 from easydict import EasyDict as edict
 import google_api
 import re
+import warnings
 
 FFMPEG = "ffmpeg "
 
@@ -96,16 +98,20 @@ def remove_video_track(input, output=None, ffmpeg_path=None):
     return ffmpegResult, output
 
 @ffmpeg
-def process_video(input, output=None, ffmpeg_path=None, blank_video="", overwrite=True):
-    blank_video = "-vf drawbox=color=black:t=fill" if blank_video else ""
-    command = f"""{ffmpeg_path} -y -i "{input}" -af dynaudnorm -ac 1 {blank_video} "{output}" """
+def process_video(input, output=None, ffmpeg_path=None, blank_video="", overwrite=True, normalize_audio=False):
+    #blank_video = "-vf drawbox=color=black:t=fill" if blank_video else ""
+    blank_video = "-vn" if blank_video else ""
+    normalize_audio = "-af dynaudnorm" if normalize_audio else ""
+    shrink = "-s 2x2"
+    codec = " -acodec copy "
+    command = f"""{ffmpeg_path} -y -i "{input}" {normalize_audio} -ac 1 {blank_video} {shrink} -threads 4 {codec} "{output}" """
     print(command)
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
 
 @ffmpeg
 def process_audio(input, output, ffmpeg_path="ffmpeg ",
-                sample_rate=44100, codec="mp3"):
+                sample_rate=44100, codec="mp3", normalize_audio=True):
     if codec[0] != ".":
         codec = "." + codec
     if codec == ".flac":
@@ -117,15 +123,30 @@ def process_audio(input, output, ffmpeg_path="ffmpeg ",
 
     if output[-len(codec):] != codec:
         output_str = str(Path(output).with_suffix(codec))
+    else:
+        output_str = str(output)
 
-    command = f"""{ffmpeg_path} -y -i "{input}" {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+    normalize_audio = "-af dynaudnorm" if normalize_audio else ""
+
+    command = f"""{ffmpeg_path} -y -i "{input}" {codec_command} {normalize_audio} -ac 1 -vn {output_str}"""
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
 
 
 def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path="ffmpeg ",
-                sample_rate=44100, codec="mp3"):
-    """ Split video into 1 hour segments
+                sample_rate=44100, codec="mp3", normalize_audio=True):
+    """ Split audio into 1 hour segments
+
+    Args:
+        path: path to video
+        name: name of output file
+        length: length of each segment
+        start_time: start time of video
+        end_time: end time of video
+        ffmpeg_path: path to ffmpeg
+        sample_rate: sample rate of output audio
+        codec: codec of output audio
+        normalize_audio (bool): normalize audio (default is True for audio files, false for video files)
 
     """
     if name is None:
@@ -140,8 +161,8 @@ def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="9
         codec_command =  f"-ar {sample_rate} "
     else:
         codec_command = ""
-
-    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i -y "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -ac 1 -vn {output_str}"""
+    normalize_audio = "-af dynaudnorm" if normalize_audio else ""
+    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i -y "{path}" -f segment -segment_time {length} {codec_command} {normalize_audio} -ac 1 -vn {output_str}"""
     # -ac 1 : one audio channel
     # -vn   : exclude video
 
@@ -149,7 +170,7 @@ def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="9
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
 
-def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path=None):
+def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path=None, normalize_audio=False):
     """ Split video into 1 hour segments
 
     """
@@ -165,8 +186,10 @@ def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="9
     output_str = f'"{output}.{codec}"'
 
 
-    #command = f"""{ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} -af dynaudnorm -ac 1 "{output_str}" """
-    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" -f segment -segment_time {length} {codec_command} -af dynaudnorm -vf drawbox=color=black:t=fill {output_str}"""
+    #command = f"""{ffmpeg_path} -i "{path}" -f segment -segment_time {length} -ss {start_time} -to {end_time} {codec_command} {normalize_audio} -ac 1 "{output_str}" """
+    normalize_audio = "-af dynaudnorm" if normalize_audio else ""
+    shrink = "-s 2x2"
+    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i "{path}" {shrink} -f segment -segment_time {length} {codec_command} {normalize_audio} -vf drawbox=color=black:t=fill {output_str}"""
     # -ac 1 : one audio channel
     # -vn   : exclude video
     # -af dynaudnorm : make sound volumes all the same (for background swears)
@@ -176,7 +199,11 @@ def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="9
     return ffmpegResult, output
 
 
-def process_config(path=ROOT / "configs/default_config", video_path="", response_path=""):
+def process_config(path=ROOT / "configs/default_config",
+                   video_path="",
+                   response_path="",
+                   mute_list="",
+                   pickle_path=""):
     from configparser import ConfigParser
     config = ConfigParser()
     assert Path(path).exists()
@@ -184,10 +211,18 @@ def process_config(path=ROOT / "configs/default_config", video_path="", response
     # config["main"]["require_api_confirmation"] = config.getboolean('main', 'require_api_confirmation')  # require confirmation before performing a billed process
     # config["main"]["testing"] = config.getboolean('main', 'testing')
     my_config = {s: dict(config.items(s)) for s in config.sections()}
+
+    # DEFAULTS
+    my_config["google_api_request_made"] = False
+
     if video_path:
         my_config["main"]["video_path"] = video_path
     if response_path:
         my_config["paths"]["load_response_path"] = response_path
+    if mute_list:
+        my_config["paths"]["mute_list_path"] = mute_list
+    if pickle_path:
+        my_config["paths"]["pickle_path"] = pickle_path
 
     # Make paths relative to root
     for k,v in my_config["paths"].items():
@@ -200,6 +235,12 @@ def process_config(path=ROOT / "configs/default_config", video_path="", response
         p = Path(my_config["main"]["video_path"])
         name = re.sub('[^-a-zA-Z_0-9]+', "", re.sub('[. _]+', "_", p.stem))
         my_config["main"]["uri"] = rf"gs://remove_profanity_from_movie_project/{name}{p.suffix}"
+
+    if "clean_video_path" not in my_config:
+        video_path = Path(my_config["main"]["video_path"])
+        my_config["paths"]["clean_video_path"] = video_path.parent / (video_path.stem + "_clean" + video_path.suffix)
+        my_config["paths"]["video_output_root"] = Path(my_config["paths"]["clean_video_path"]).parent
+
     for s in config.sections():
         for key,item in my_config[s].items():
             if str(item).lower().strip() == "true":
@@ -244,18 +285,42 @@ def format_mute_list(mute_list, mute_list_file):
             f.write(formatted_mute_list)
     return formatted_mute_list
 
-def create_clean_video_command(input_path, output_path, mute_list=None, testing=False, ffmpeg_path="ffmpeg ", mute_list_file=None):
+def check_for_mute_list(input_video_path):
+    input_video_path = Path(input_video_path)
+    mute_list_path = input_video_path.parent / (input_video_path.stem + "_clean_MUTE.txt")
+    if mute_list_path.exists():
+        print("Mute list exists, using it")
+        return mute_list_path
+    else:
+        return None
+
+def check_for_response_file(input_video_path, response_folder):
+    input_video_path = Path(input_video_path)
+    files = list(Path(response_folder).rglob(input_video_path.stem + "*.response"))
+    if files:
+        use_response = input("Response file exists! Use it? (y/n)")
+        if use_response.lower() == "y":
+            return files[-1]
+    return None
+
+def create_clean_video_command(input_path, output_path, mute_list=None, testing=False, ffmpeg_path="ffmpeg ",
+                               mute_list_file=None):
     output_ext = Path(input_path).suffix
     if mute_list_file is None:
         mute_list_file = output_path.parent / (output_path.stem + "_MUTE.txt")
         formatted_mute_list = format_mute_list(mute_list,mute_list_file)
     testing = "-to 00:01:00" if testing else ""
 
+    ffprobe_json = get_ffprobe_json(input_path)
+    audio_format = get_audio_encoding_from_ffprobe_json(ffprobe_json)
+    audio_bitrate = f"{int(get_audio_bitrate_from_ffprobe_json(ffprobe_json)) // 1000}k"
+
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
               f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \
-              f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 aac -map 0:a -c:a:1 copy  """ + \
+              f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 {audio_format} -b:a:0 {audio_bitrate} -map 0:a -c:a:1 copy  """ + \
               f"""-disposition:a:0 default""" + \
               f""" "{str(Path(output_path).with_suffix(output_ext))}" """
+    # f""" -threads 4 """ + \
 
     r"""
     -y – A global option to overwrite the output file if it already exists.
@@ -278,15 +343,30 @@ def create_clean_video_command(input_path, output_path, mute_list=None, testing=
     print(command)
     return command, mute_list_file
 
-def create_clean_video(input_path, output_path, mute_list, testing=False, ffmpeg_path="ffmpeg ", clean_mute_list=False):
-    command, mute_list_file = create_clean_video_command(input_path, output_path, mute_list, testing, ffmpeg_path)
+def create_clean_video(input_path,
+                       output_path,
+                       mute_list=None,
+                       testing=False,
+                       ffmpeg_path="ffmpeg ",
+                       del_mute_list_after=False,
+                       mute_list_file=None):
+
+    if mute_list is None and mute_list_file is None:
+        mute_list_file = check_for_mute_list(input_path)
+        if mute_list_file is None:
+            raise ValueError("No mute list provided")
+        else:
+            warnings.warn("No mute list provided, using discovered mute list {}".format(mute_list_file))
+
+    command, mute_list_file = create_clean_video_command(input_path, output_path, mute_list, testing, ffmpeg_path,
+                                                         mute_list_file=mute_list_file)
     ffmpegResult = delegator.run(command,
                                  block=True)
     if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
         print(ffmpegResult.err)
         raise ValueError('Could not process %s' % (input_path))
 
-    if clean_mute_list:
+    if del_mute_list_after:
         os.remove(mute_list_file)
 
 def get_length(filename, ffprobe_path=r"ffprobe"):
@@ -299,9 +379,37 @@ def get_length(filename, ffprobe_path=r"ffprobe"):
                             stderr=subprocess.STDOUT)
     return float(result.stdout)
 
+def get_ffprobe_json(filename, ffprobe_path=r"ffprobe"):
+    command = [str(ffprobe_path), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_error",
+               str(filename)]
+    print(" ".join(command))
+    result = subprocess.run(command,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    return json.loads(result.stdout)
 
-if __name__=="__main__":
+def get_audio_encoding_from_ffprobe_json(ffprobe_json):
+    streams = ffprobe_json["streams"]
+    for stream in streams:
+        if stream["codec_type"] == "audio":
+            return stream["codec_name"]
+
+def get_audio_bitrate_from_ffprobe_json(ffprobe_json):
+    streams = ffprobe_json["streams"]
+    for stream in streams:
+        if stream["codec_type"] == "audio":
+            return stream["bit_rate"]
+
+def config_parser_test():
     config, _config_parser = process_config(video_path="example/video.mp4")
     print(config.uri)
+
+def audio_encoding_test():
+    ffprobe_json = get_ffprobe_json("J:\Media\Videos\Misc Videos\msc\The Dropout\The.Dropout.S01E01.mkv")
+    print(get_audio_encoding_from_ffprobe_json(ffprobe_json))
+    print(get_audio_bitrate_from_ffprobe_json(ffprobe_json))
+
+if __name__=="__main__":
+    audio_encoding_test()
     #ga = google_api(**config)
     #ga.resume_operation(config.operation_path)
