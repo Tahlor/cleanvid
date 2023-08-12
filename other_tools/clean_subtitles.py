@@ -1,63 +1,78 @@
+import shutil
 import re
 from pathlib import Path
 import os
 import fileinput
-import re
 import sys
+import logging
 
+PARENT = Path(os.path.dirname(os.path.realpath(__file__)))
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
+fh = logging.FileHandler(PARENT / "logs"/ 'clean_subtitles.log')
+fh.setLevel(logging.DEBUG)
+logger.addHandler(fh)
 
-string_list = ["OpenSubtitles.org", "Support us","Subtitles by","Advertise your product", "Corrected by"]
-matched = re.compile(rf"({'|'.join(string_list)})").search
+SWEARS = PARENT.parent / "all_swears.txt"
 
-def test():
-    test = """
-    Advertise your product or brand here
-    contact www.OpenSubtitles.org today
-    
-    2
-    00:00:43,130 --> 00:00:48,130
-    Subtitles by explosiveskull
-    www.OpenSubtitles.org
-    Support us
-    Support us
-    Support us
-    1570
-    01:42:34,350 --> 01:42:39,350
-    Subtitles by explosiveskull
-    www.OpenSubtitles.org
-    
-    1570
-    01:42:40,305 --> 01:42:46,326
-    Support us and become VIP member
-    to remove all ads from www.OpenSubtitles.org
-    
-    """
+# Advertisements to remove
+string_list = ["Support us","Subtitles by","Advertise your product",
+               "Corrected by", "OpenSubtitles", "HIGH QUALITY", "LIVE TV", "subtitles"]
+matched_ad = re.compile(rf"({'|'.join(string_list)})").search
 
-    lines =  test.split("\n")
-    for line in lines:
-        if matched(line):
-            print(line)
+# Load profanity list from file
+with open(SWEARS, 'r') as f:
+    profanity_list = [line.strip() for line in f]
 
-def strip_ads(path):
-    dropped = []
+# Compile case-insensitive regex for profanity
+profanity_regex = re.compile(rf"\b({'|'.join(profanity_list)})\b", re.IGNORECASE)
+
+def censor_profanity(line):
+    line = profanity_regex.sub(lambda m: '*'*len(m.group()), line)
+    return line
+
+def strip_ads_and_profanity(path, redo=False):
+    if path.with_suffix(path.suffix + ".bak").exists() and not redo:
+        logger.info(f"Skipping: {path}")
+        return
+    else:
+        logger.info(f"Processing: {path}")
+
+    if redo:
+        logger.info(f"Redoing: {path}")
+        backup_file = path.with_suffix(path.suffix + ".bak")
+        if backup_file.exists():
+            shutil.copyfile(backup_file, path)
+
     with fileinput.FileInput(path, inplace=1, backup='.bak') as file:
-        for line in file:
-            if not matched(line):  # save lines that do not match
-                print(line, end='')  # this goes to filename due to inplace=1
+        for i, line in enumerate(file):
+            if i == 0:  # Insert a comment on the first line
+                print("""0
+00:00:00,000 --> 00:00:00,000
+This file has been modified to remove ads and profanity\n""")
+            if not matched_ad(line):  # save lines that do not match
+                new_line = censor_profanity(line)  # censor any profanity in the line
+                print(new_line, end='')  # this goes to filename due to inplace=1
             else:
-                dropped.append(line)
-    print(dropped, path)
+                print(end='')
 
+def argparse():
+    import argparse
+    parser = argparse.ArgumentParser(description='Strip ads and profanity from subtitle files')
+    parser.add_argument('--root', default="J:\Media\Videos", type=str, help='Root directory to search for subtitle files')
+    parser.add_argument('--redo', action='store_true', help='Redo files that have already been processed')
+    args = parser.parse_args()
+    return args
 
 if __name__=='__main__':
-    #root = input("Subtitle root directory: ") # "%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
-    root = r"%LOCALAPPDATA%\Plex Media Server\Media\localhost\0"
-    root = r"C:\Users\Taylor\AppData\Local\Plex Media Server\Media"
     root = "J:\Media\Videos"
+    #root = "J:\Media\Videos\TV\Parents\Hijack"
     print(Path(root).resolve())
-
+    args = argparse()
     for path in Path(root).rglob("*.srt"):
         try:
-            strip_ads(path)
-        except:
-            pass
+            strip_ads_and_profanity(path, redo=args.redo)
+        except Exception as e:
+            logger.info(f"Error processing {path}: {e}")
+            continue
+    logger.info("Done!")

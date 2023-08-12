@@ -313,7 +313,10 @@ def create_clean_video_command(input_path, output_path, mute_list=None, testing=
 
     ffprobe_json = get_ffprobe_json(input_path)
     audio_format = get_audio_encoding_from_ffprobe_json(ffprobe_json)
-    audio_bitrate = f"{int(get_audio_bitrate_from_ffprobe_json(ffprobe_json)) // 1000}k"
+    try:
+        audio_bitrate = f"{int(get_audio_bitrate_from_ffprobe_json(ffprobe_json)) // 1000}k"
+    except:
+        audio_bitrate = "256k"
 
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
               f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \

@@ -169,7 +169,7 @@ class CleanProfanity:
         if utils.file_exists(processed_path) and not overwrite_local:
             # get file size in MB
             size = os.path.getsize(processed_path) / 1000000
-            print(f"{processed_path} already exists {size} bytes")
+            print(f"{processed_path} already exists {size} MB")
             overwrite_local = input("Overwrite? (y/n): ").lower() == "y"
 
         if (not utils.file_exists(processed_path)) or overwrite_local:

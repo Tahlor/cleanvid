@@ -12,14 +12,25 @@ import my_logging
 #logger = logging.getLogger("root." + __name__)
 logger = my_logging.setup_logging("./logs", log_name="batch_", datefmt="%m-%d-%Y %H:%M:%S")
 
-today = datetime.today()
-MONTH = datetime(today.year, today.month, 1).strftime("%Y %B")
 video_extensions = ["*.mp4","*.avi", "*.mkv", "*.m4v"]
 UTILIZATION = {}
 MAX_UTILIZATION = 60*1000
 
+def get_month():
+    today = datetime.today()
+    return datetime(today.year, today.month, 1).strftime("%Y %B")
+
+def check_month_utilization():
+    global MONTH
+    MONTH = get_month()
+    if UTILIZATION[MONTH] > MAX_UTILIZATION:
+        warnings.warn("MAX utilization reached")
+        raise Exception("MAX utilization reached")
+
+MONTH = get_month()
+
 def process_batch_list(batch_list, config, video_path):
-    global UTILIZATION
+    global UTILIZATION, MONTH
     if video_path:
         if batch_list:
             print("Video path specified, ignoring batch list")
@@ -38,9 +49,9 @@ def process_batch_list(batch_list, config, video_path):
         if item[0].strip()=="#":
             print(f"skipping {item}")
             continue
-        if UTILIZATION[MONTH] > MAX_UTILIZATION:
-            warnings.warn("MAX utilization reached")
-            break
+
+        check_month_utilization()
+
         print(f"Checking if {item} exists...")
         full_items = list(search_folder_for_video(item))
         for full_item in full_items:
@@ -49,6 +60,7 @@ def process_batch_list(batch_list, config, video_path):
                 config, _config_parser = utils.process_config(opts.config, video_path=full_item)
                 total_length = utils.get_length(full_item, Path(config.ffmpeg_path).parent/"ffprobe")
                 total_length = round(total_length+7.49,15)
+                check_month_utilization()
                 if total_length > 1200: # should be longer than 20 minutes
                     success = process_item(config, _config_parser)
                     if success:
@@ -56,6 +68,8 @@ def process_batch_list(batch_list, config, video_path):
                     if config.google_api_request_made:
                         print(f"Adding to utilization {total_length}")
                         UTILIZATION[MONTH] += total_length
+                        UTILIZATION[f"{MONTH} dict"][Path(full_item).name] = total_length
+                        save_utilization(UTILIZATION)
                     else:
                         print("NOT SUCCESS")
                 else:
@@ -116,6 +130,8 @@ def load_utilization():
         UTILIZATION = {}
     if MONTH not in UTILIZATION:
         UTILIZATION[MONTH] = 0
+    if MONTH + " dict" not in UTILIZATION:
+        UTILIZATION[MONTH + " dict"] = {}
     return UTILIZATION
 
 def save_utilization(utilization):
