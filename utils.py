@@ -11,6 +11,7 @@ import re
 import warnings
 
 FFMPEG = "ffmpeg "
+VALID_FLOAT_REGEX = re.compile(r"^\d+\.?\d*")
 
 ROOT = Path(__file__).parent.absolute()
 while True:
@@ -214,6 +215,7 @@ def process_config(path=ROOT / "configs/default_config",
 
     # DEFAULTS
     my_config["google_api_request_made"] = False
+    my_config["google_api_request_allowed"] = True
 
     if video_path:
         my_config["main"]["video_path"] = video_path
@@ -372,6 +374,7 @@ def create_clean_video(input_path,
     if del_mute_list_after:
         os.remove(mute_list_file)
 
+
 def get_length(filename, ffprobe_path=r"ffprobe"):
     command = [str(ffprobe_path), "-v", "error", "-show_entries",
                "format=duration", "-of",
@@ -380,7 +383,8 @@ def get_length(filename, ffprobe_path=r"ffprobe"):
     result = subprocess.run(command,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
-    return float(result.stdout)
+    valid_float = VALID_FLOAT_REGEX.match(result.stdout.decode()).group(0)
+    return float(valid_float)
 
 def get_ffprobe_json(filename, ffprobe_path=r"ffprobe"):
     command = [str(ffprobe_path), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_error",

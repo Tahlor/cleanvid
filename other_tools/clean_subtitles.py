@@ -17,8 +17,19 @@ SWEARS = PARENT.parent / "all_swears.txt"
 
 # Advertisements to remove
 string_list = ["Support us","Subtitles by","Advertise your product",
-               "Corrected by", "OpenSubtitles", "HIGH QUALITY", "LIVE TV", "subtitles"]
-matched_ad = re.compile(rf"({'|'.join(string_list)})").search
+               "Corrected by", "OpenSubtitles", "HIGH QUALITY", "LIVE TV", "subtitles",
+               "YTS", "YIFY", "\.TV", "\.COM", "\.NET", "\.ORG", "\.INFO", "\.BIZ", "\.US",
+               "\.ME", "\.IO", "\.CO", "\.CC", "\.WS", "\.TO", "\.EU", "\.CH", "\.AE", "\.LI", "\.MX", "\.TV", "\.RU",
+               "\.WS", "\.AC", "\.AG", "\.AM", "\.AT", "\.BE", "\.BZ", "\.CA", "\.CZ", "\.DE", "\.DK", "\.ES", "\.FR",
+               "\.IN", "\.IT", "\.JP", "\.LA", "\.NL", "\.PL", "\.RO", "\.SE", "\.SG", "\.SH", "\.SK", "\.TC", "\.TL",
+               "\.TW", "\.VC", "\.VG", "\.VN", "\.YT", "\.NU", "\.FM", "\.GS", "\.HK", "\.IM", "\.IS", "\.LI", "\.LT",
+               "\.LU", "\.MN", "\.MS", "\.MU", "\.NF", "\.NO", "\.NZ", "\.PE", "\.PH", "\.RE", "\.SC", "\.TC", "\.TF",
+               "\.TK", "\.TM", "\.TW", "\.VC", "\.VG", "\.YT", "\.NU", "\.FM", "\.GS", "\.HK", "\.IM", "\.IS", "\.LI",
+               "\.LT", "\.LU", "\.MN", "\.MS", "\.MU", "\.NF", "\.NO", "\.NZ", "\.PE", "\.PH", "\.RE", "\.SC", "\.TC",
+               "\.TF", "\.TK", "\.TM", "\.TW", "\.VC", "\.VG", "\.YT", "\.NU", "\.FM", "\.GS", "\.HK", "\.IM", "\.IS",
+               "\.LI", "\.LT", "\.LU", "\.MN", "\.MS", "\.MU", "\.NF", "\.NO", "\.NZ", "\.PE", "\.PH", "\.RE", "\.SC",
+               "\.TC", "\.TF", "\.TK"]
+matched_ad = re.compile(rf"({'|'.join(string_list)})", re.IGNORECASE).search
 
 # Load profanity list from file
 with open(SWEARS, 'r') as f:

@@ -15,17 +15,17 @@ logger = my_logging.setup_logging("./logs", log_name="batch_", datefmt="%m-%d-%Y
 video_extensions = ["*.mp4","*.avi", "*.mkv", "*.m4v"]
 UTILIZATION = {}
 MAX_UTILIZATION = 60*1000
-
+UTILIZATION_EXCEEDED = False
 def get_month():
     today = datetime.today()
     return datetime(today.year, today.month, 1).strftime("%Y %B")
 
 def check_month_utilization():
-    global MONTH
+    global MONTH, UTILIZATION_EXCEEDED
     MONTH = get_month()
     if UTILIZATION[MONTH] > MAX_UTILIZATION:
         warnings.warn("MAX utilization reached")
-        raise Exception("MAX utilization reached")
+        UTILIZATION_EXCEEDED = True
 
 MONTH = get_month()
 
@@ -46,7 +46,10 @@ def process_batch_list(batch_list, config, video_path):
     # load list
     for item in batch_list:
 		# Skip commented ones
-        if item[0].strip()=="#":
+        line = item.strip()
+        if not line:
+            continue
+        elif line[0] =="#":
             print(f"skipping {item}")
             continue
 
@@ -57,10 +60,12 @@ def process_batch_list(batch_list, config, video_path):
         for full_item in full_items:
             if full_item:
                 print("Working on ", Path(full_item).name)
-                config, _config_parser = utils.process_config(opts.config, video_path=full_item)
+                mute_list = search_for_mute_list(full_item)
+                config, _config_parser = utils.process_config(opts.config, video_path=full_item, mute_list=mute_list)
                 total_length = utils.get_length(full_item, Path(config.ffmpeg_path).parent/"ffprobe")
                 total_length = round(total_length+7.49,15)
                 check_month_utilization()
+                config["google_api_request_allowed"] = not UTILIZATION_EXCEEDED
                 if total_length > 1200: # should be longer than 20 minutes
                     success = process_item(config, _config_parser)
                     if success:
@@ -70,6 +75,7 @@ def process_batch_list(batch_list, config, video_path):
                         UTILIZATION[MONTH] += total_length
                         UTILIZATION[f"{MONTH} dict"][Path(full_item).name] = total_length
                         save_utilization(UTILIZATION)
+                        print(f"Total Utilization {MONTH}: {UTILIZATION[MONTH]}")
                     else:
                         print("NOT SUCCESS")
                 else:
@@ -79,6 +85,14 @@ def process_batch_list(batch_list, config, video_path):
 
     print("New Utilization", MONTH, UTILIZATION[MONTH])
     save_utilization(UTILIZATION)
+
+def search_for_mute_list(full_item):
+    full_item = Path(full_item)
+    mute_list = full_item.parent / (full_item.stem + "_clean_MUTE.txt")
+    if mute_list.exists():
+        return mute_list
+    else:
+        return ""
 
 def search_folder_for_video(folder):
     if Path(folder).suffix in [x.replace("*","") for x in video_extensions]:

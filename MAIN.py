@@ -190,6 +190,10 @@ class CleanProfanity:
         else:
             uri_name = str(Path(vid.parent.name)) / vid.name
 
+        if config is not None:
+            if not config["google_api_request_allowed"]:
+                raise Exception("Google API request not allowed; has utilization been exceeded?")
+
         destination, file_already_uploaded = self.upload_to_cloud(vid, uri_name, overwrite=overwrite_cloud, already_processed_okay=already_processed_okay)
         if file_already_uploaded:
             if operation is None:
