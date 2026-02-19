@@ -9,10 +9,12 @@ from easydict import EasyDict as edict
 import google_api
 import re
 import warnings
+import shutil
+import uuid
 
 FFMPEG = "ffmpeg "
 VALID_FLOAT_REGEX = re.compile(r"^\d+\.?\d*")
-
+AUDIO_CHANNEL_ARG = "" #-ac 1
 ROOT = Path(__file__).parent.absolute()
 while True:
     if ROOT.name != "cleanvid" and ROOT:
@@ -105,7 +107,7 @@ def process_video(input, output=None, ffmpeg_path=None, blank_video="", overwrit
     normalize_audio = "-af dynaudnorm" if normalize_audio else ""
     shrink = "-s 2x2"
     codec = " -acodec copy "
-    command = f"""{ffmpeg_path} -y -i "{input}" {normalize_audio} -ac 1 {blank_video} {shrink} -threads 4 {codec} "{output}" """
+    command = f"""{ffmpeg_path} -y -i "{input}" {normalize_audio} {AUDIO_CHANNEL_ARG} {blank_video} {shrink} -threads 4 {codec} "{output}" """
     print(command)
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
@@ -129,7 +131,7 @@ def process_audio(input, output, ffmpeg_path="ffmpeg ",
 
     normalize_audio = "-af dynaudnorm" if normalize_audio else ""
 
-    command = f"""{ffmpeg_path} -y -i "{input}" {codec_command} {normalize_audio} -ac 1 -vn {output_str}"""
+    command = f"""{ffmpeg_path} -y -i "{input}" {codec_command} {normalize_audio} {AUDIO_CHANNEL_ARG} -vn {output_str}"""
     ffmpegResult = delegator.run(command, block=True)
     return ffmpegResult, output
 
@@ -163,12 +165,54 @@ def split_audio(path, name=None, length=3600, start_time="00:00:00", end_time="9
     else:
         codec_command = ""
     normalize_audio = "-af dynaudnorm" if normalize_audio else ""
-    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -i -y "{path}" -f segment -segment_time {length} {codec_command} {normalize_audio} -ac 1 -vn {output_str}"""
+    command = f"""{ffmpeg_path} -ss {start_time} -to {end_time} -y -i "{path}" -f segment -segment_time {length} {codec_command} {normalize_audio} {AUDIO_CHANNEL_ARG} -vn {output_str}"""
     # -ac 1 : one audio channel
     # -vn   : exclude video
 
     print(command)
     ffmpegResult = delegator.run(command, block=True)
+    
+    if ffmpegResult.return_code != 0:
+        print(f"Direct access failed: {ffmpegResult.err}")
+        # Fallback: Copy to temp and retry
+        try:
+            print("Attempting fallback: Copying video to local temp...")
+            temp_dir = Path("./temp")
+            temp_dir.mkdir(exist_ok=True)
+            temp_file = temp_dir / f"fallback_{uuid.uuid4()}{Path(path).suffix}"
+            
+            shutil.copy2(path, temp_file)
+            print(f"Copied to {temp_file}, retrying extraction...")
+            
+            # Recurse with temp file, but KEEP ORIGINAL NAME for output folder stability
+            return split_audio(
+                temp_file, 
+                name=name, 
+                length=length, 
+                start_time=start_time, 
+                end_time=end_time,
+                ffmpeg_path=ffmpeg_path,
+                sample_rate=sample_rate,
+                codec=codec,
+                normalize_audio=normalize_audio
+            )
+            
+        except Exception as e:
+            print(f"Fallback failed: {e}")
+            # Clean up if possible
+            if 'temp_file' in locals() and temp_file.exists():
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            raise ValueError(f"Could not extract audio (primary and fallback failed): {ffmpegResult.err}")
+        finally:
+             if 'temp_file' in locals() and temp_file.exists():
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+
     return ffmpegResult, output
 
 def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="99:59:59", ffmpeg_path=None, normalize_audio=False):
@@ -197,6 +241,9 @@ def split_video(path, name=None, length=3600, start_time="00:00:00", end_time="9
     # -vf drawbox=color=black:t=fill : replace video with black
     print(command)
     ffmpegResult = delegator.run(command, block=True)
+    if ffmpegResult.return_code != 0:
+        print(ffmpegResult.err)
+        raise ValueError(f"Could not split video: {ffmpegResult.err}")
     return ffmpegResult, output
 
 
@@ -278,6 +325,19 @@ def parse_swears(swears= ROOT / "swears.txt"):
         lines = [line.rstrip('\n').split("|")[0] for line in f]
     return lines
 
+def parse_subtitle_exceptions(path=ROOT / "subtitle_exceptions.txt"):
+    """Parse words that are bleeped from transcription but allowed if confirmed by subtitles.
+    
+    Returns:
+        set: Words that should be conditionally allowed if present in subtitles.
+    """
+    if not Path(path).exists():
+        return set()
+    with open(path) as f:
+        lines = [line.strip().lower() for line in f 
+                 if line.strip() and not line.strip().startswith('#')]
+    return set(lines)
+
 def format_mute_list(mute_list, mute_list_file):
     formatted_mute_list = f"""[a:0]{",".join(mute_list)}[a]"""
     if mute_list_file:
@@ -323,7 +383,7 @@ def create_clean_video_command(input_path, output_path, mute_list=None, testing=
     command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
               f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \
               f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 {audio_format} -b:a:0 {audio_bitrate} -map 0:a -c:a:1 copy  """ + \
-              f"""-disposition:a:0 default""" + \
+              f"""-disposition:a:0 default -disposition:a:1 none -max_muxing_queue_size 9999""" + \
               f""" "{str(Path(output_path).with_suffix(output_ext))}" """
     # f""" -threads 4 """ + \
 
@@ -383,7 +443,14 @@ def get_length(filename, ffprobe_path=r"ffprobe"):
     result = subprocess.run(command,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
-    valid_float = VALID_FLOAT_REGEX.match(result.stdout.decode()).group(0)
+    try:
+        valid_float = VALID_FLOAT_REGEX.match(result.stdout.decode()).group(0)
+    except AttributeError:
+        # If match fails (None has no attribute group)
+        print(f"Error getting length for {filename}. Output: {result.stdout.decode()}")
+        # Fallback or re-raise with better message
+        raise ValueError(f"Could not determine length for {filename}")
+        
     return float(valid_float)
 
 def get_ffprobe_json(filename, ffprobe_path=r"ffprobe"):
@@ -393,7 +460,10 @@ def get_ffprobe_json(filename, ffprobe_path=r"ffprobe"):
     result = subprocess.run(command,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
-    return json.loads(result.stdout)
+    # trim to end of json
+    data = result.stdout.decode()
+    data = data[:data.rfind("}")+1]
+    return json.loads(data)
 
 def get_audio_encoding_from_ffprobe_json(ffprobe_json):
     streams = ffprobe_json["streams"]
@@ -415,6 +485,22 @@ def audio_encoding_test():
     ffprobe_json = get_ffprobe_json("J:\Media\Videos\Misc Videos\msc\The Dropout\The.Dropout.S01E01.mkv")
     print(get_audio_encoding_from_ffprobe_json(ffprobe_json))
     print(get_audio_bitrate_from_ffprobe_json(ffprobe_json))
+    
+def generate_gcs_uri(source_path, bucket_name=None):
+    """Generate the GCS URI for a file, matching the hash convention."""
+    import hashlib
+    import Global_Config
+    
+    bucket_name = bucket_name or Global_Config.BUCKET_NAME
+    
+    destination = Path(source_path).name
+    destination = re.sub(r"[#\[\]*?]", "_", destination)
+    
+    # Hash destination to match main convention
+    hash_val = hashlib.md5(destination.encode()).hexdigest()[:10]
+    destination = f"{destination[:9]} + {hash_val}"
+    
+    return f"gs://{bucket_name}/{destination}"
 
 if __name__=="__main__":
     audio_encoding_test()

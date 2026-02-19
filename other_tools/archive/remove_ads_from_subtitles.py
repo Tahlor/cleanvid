@@ -7,7 +7,7 @@ import sys
 
 
 # Match any part of this string to delete the section
-string_list = ["OpenSubtitles.org", "Support us","Subtitles by","Advertise your product", "Corrected by", "OpenSubtitles"]
+string_list = ["OpenSubtitles.org", "Support us","Subtitles by","Advertise your product", "Corrected by", "OpenSubtitles", "www."]
 matched = re.compile(rf"({'|'.join(string_list)})").search
 
 def _test():

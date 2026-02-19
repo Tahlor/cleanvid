@@ -1,0 +1,7 @@
+# Words that are bleeped from transcription but allowed if confirmed by subtitles
+# These are words that may be intentionally included in family-friendly content
+# Format: word (one per line, # for comments)
+hell
+damn
+god
+jesus

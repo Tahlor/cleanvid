@@ -8,6 +8,7 @@ import os
 import pickle
 import traceback
 from easydict import EasyDict as edict
+import Global_Config
 
 from google.protobuf import json_format
 from google.longrunning import operations_pb2
@@ -44,6 +45,7 @@ class google_speech_api:
                  **kwargs
                  ):
         self.swears = utils.parse_swears()
+        self.subtitle_exceptions = utils.parse_subtitle_exceptions()
         self.codec = codec
         self.sample_rate = sample_rate
         self.api = api
@@ -65,6 +67,54 @@ class google_speech_api:
 
         self.require_api_confirmation = require_api_confirmation
         self.response_output_folder = config.api_response_root if config is not None else Path("./data/google_api")
+
+    def upload_file(self, source_path, overwrite=True):
+        """Upload a file to Google Cloud Storage.
+
+        Args:
+            source_path: Local path to the file to upload.
+            overwrite: If True, overwrite existing blob in GCS.
+
+        Returns:
+            str: The GCS URI (gs://bucket/destination) of the uploaded file.
+        """
+        import hashlib
+        import tqdm
+        from google.cloud import storage
+
+        BLOB_SIZE = 1  # MB
+        storage.blob._MAX_MULTIPART_SIZE = BLOB_SIZE * 1024 * 1024
+        storage.blob._DEFAULT_CHUNKSIZE = BLOB_SIZE * 1024 * 1024
+
+        storage_client = storage.Client()
+        try:
+            bucket = storage_client.create_bucket(Global_Config.BUCKET_NAME)
+        except Exception:
+            bucket = storage_client.get_bucket(Global_Config.BUCKET_NAME)
+
+        source_path = str(source_path)
+        gcs_uri = utils.generate_gcs_uri(source_path)
+        destination = gcs_uri.replace(f"gs://{Global_Config.BUCKET_NAME}/", "")
+
+        blob_exists = storage.Blob(bucket=bucket, name=destination).exists(storage_client)
+        if not blob_exists or overwrite:
+            print(f"Uploading {destination}...")
+            blob = bucket.blob(destination)
+            blob.chunk_size = BLOB_SIZE * 1024 * 1024
+
+            with open(source_path, "rb") as in_file:
+                total_bytes = os.fstat(in_file.fileno()).st_size
+                with tqdm.tqdm.wrapattr(
+                    in_file, "read", total=total_bytes, miniters=1,
+                    desc=f"upload to {bucket.name}"
+                ) as file_obj:
+                    blob.upload_from_file(file_obj, size=total_bytes)
+        else:
+            print(f"{destination} already uploaded")
+
+        print("Done uploading")
+        gcs_uri = f"gs://{Global_Config.BUCKET_NAME}/{destination}"
+        return gcs_uri
 
     def serialize_operation(self, future, name):
         now = datetime.now().strftime("%Y-%m-%d %H;%M;%S")
@@ -98,13 +148,13 @@ class google_speech_api:
         return response
 
     def restore_operation(self, json_path):
-        """ UNTESTED AND PROBABLY NOT WORKING
+        """ Restores a long-running operation from a JSON file.
 
         Args:
-            json_path:
+            json_path: Path to the .operation JSON file.
 
         Returns:
-
+            google.api_core.operation.Operation: The restored operation future.
         """
         # Convert JSON-formatted string to proto message
         operation_json = json.load(Path(json_path).open())
@@ -130,8 +180,8 @@ class google_speech_api:
             future = from_gapic(
                 operation=operation,
                 operations_client=self.client.transport.operations_client,
-                result_type=_video_intelligence.AnnotateVideoResponse,
-                #metadata_type=_video_intelligence.
+                result_type=_video_intelligence1.AnnotateVideoResponse,
+                metadata_type=_video_intelligence1.AnnotateVideoProgress
             )
 
         # operation = video_client.annotate_video(
@@ -184,6 +234,67 @@ class google_speech_api:
             traceback.print_exc()
         return response
 
+    def submit_operation(self, storage_uri, name=None):
+        """Submit a transcription operation without polling. Returns (operation, name).
+        
+        Use with poll_all_operations() to process multiple segments concurrently.
+        """
+        if name is None:
+            name = Path(storage_uri).stem
+        
+        if self.api == "speech":
+            operation = self.create_speech_operation(storage_uri=storage_uri)
+        elif self.api == "video":
+            operation = self.create_video_speech_operation(storage_uri=storage_uri)
+        else:
+            raise Exception(f"Unknown API: {self.api}")
+        
+        self.serialize_operation(operation, name=name)
+        return operation, name
+
+    def poll_all_operations(self, operations):
+        """Poll multiple operations concurrently until all complete.
+        
+        Args:
+            operations: List of (operation, name) tuples from submit_operation.
+            
+        Returns:
+            List of (response, name) tuples in the same order.
+        """
+        pending = {i: (op, name) for i, (op, name) in enumerate(operations)}
+        results = [None] * len(operations)
+        
+        while pending:
+            still_pending = {}
+            for i, (operation, name) in pending.items():
+                try:
+                    response = operation.result(timeout=5)
+                    if response is not None:
+                        try:
+                            response = self.serialize_response(response, name=name)
+                        except:
+                            traceback.print_exc()
+                        results[i] = (response, name)
+                        print(f"  ✓ Segment '{name}' transcription complete.")
+                        continue
+                except Exception:
+                    # Still in progress — check metadata for progress
+                    try:
+                        if hasattr(operation.metadata, "progress_percent"):
+                            pct = operation.metadata.progress_percent
+                        else:
+                            pct = operation.metadata.annotation_progress._pb[0].progress_percent
+                        print(f"  [{name}] {pct}%")
+                    except:
+                        print(f"  [{name}] waiting...")
+                still_pending[i] = (operation, name)
+            
+            pending = still_pending
+            if pending:
+                sleep(10)
+        
+        return results
+
     def process_speech(self, storage_uri, name=None, response=None, operation=None, path=None):
         if name is None:
             name = Path(storage_uri).stem
@@ -203,130 +314,154 @@ class google_speech_api:
             response = self.load_response(response)
         path = Path(f"./data/mute_lists") if path is None else Path(path)
         path.mkdir(exist_ok=True, parents=True)
-        mute_list, transcript = self.create_mute_list_from_response(response)
+        
+        # New workflow: Words -> CSV -> Mute List
+        words = self.get_words_from_response(response)
+        
+        # Save words to CSV for manual editing
+        csv_path = self.response_output_folder / f"{name}_words.csv"
+        self.save_words_to_csv(words, csv_path)
+        print(f"Exported words to {csv_path}")
+
+        mute_list, transcript, _ = self.create_mute_list_from_words(words)
+        
         pickle.dump({"mute_list": mute_list, "transcript": transcript},
                     (path / f"{name}.pickle").open("wb"))
         return mute_list, transcript
 
-    def process_adult_content(self, storage_uri, name=None, response=None, path=None):
-        if name is None:
-            name = Path(storage_uri).stem
-
-        if response is None:
-            operation = self.detect_explicit_content(storage_uri=storage_uri)
-            self.serialize_operation(operation, name=name)
-            response = self.get_response(operation, name=name)
-        else:
-            response = self.load_response(response)
-
-        skip_list = self.create_skip_list(response)
-
-        path = Path(f"./data/skip_lists") if path is None else Path(path)
-        pickle.dump(skip_list,
-                    path / f"{name}.pickle".open("wb"))
-        return skip_list
-
-    def create_skip_list(self, response):
-        """ Create a list of tuples
-
-        Args:
-            response: A video response object
-
-        Returns:
-            list of tuples: [[start_skip, end_skip], ...]
-        """
-        pass
-
-    def create_speech_operation(self, storage_uri, name=None):
-        """
-        Print start and end time of each word spoken in audio file from Cloud Storage
-        https://cloud.google.com/speech-to-text/docs/basics#select-model
-
-        # storage_uri = 'gs://cloud-samples-data/speech/brooklyn_bridge.flac'
-
-        Args:
-          storage_uri URI for audio file in Cloud Storage, e.g. gs://[BUCKET]/[FILE]
-        """
-
-        # When enabled, the first result returned by the API will include a list
-        # of words and the start and end time offsets (timestamps) for those words.
-        # The language of the supplied audio
-
-        config = self.speech_config.copy()
-        if self.codec == "flac":
-            config.update({"encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.FLAC})
-        elif self.codec == "mp3":
-            config.update({
-                "sample_rate_hertz": self.sample_rate,
-                "encoding": speech_v1.enums.RecognitionConfig.AudioEncoding.MP3,
-            })
-
-        audio = {"uri": storage_uri}
-
-        # Use confirmation
-        if self.require_api_confirmation:
-            confirmation = input(f"Really recognize speech in {storage_uri}? (Y/n) ")
-            if confirmation.lower() != "y":
-                raise Exception("Did not agree to recognize speech")
-
-        operation = self.speech_client.long_running_recognize(config, audio)
-        return operation
-
-    def create_mute_list_from_response(self, response):
+    def get_words_from_response(self, response):
         def convert_to_seconds(word_time):
-            # word.start_time
             if hasattr(word_time, "nanos"):
                 start = word_time.seconds + word_time.nanos * 10 ** -9
             elif hasattr(word_time, "microseconds"):
                 start = word_time.seconds+word_time.microseconds*1e-6
             else:
-                print(word_time, type(word_time))
-                raise Exception("Unrecognized time object")
+                # v1 types might be different
+                start = word_time.seconds + word_time.nanos * 1e-9
             return start
 
-        print(u"Waiting for operation to complete...")
-        strip_punctuation = re.compile('[^-a-zA-Z \']+')
-
-        # The first result includes start and end time word offsets
-        mute_list = []
+        words = []
         if "Annotate" in str(type(response)):
-            results = [x for x in response.annotation_results[0].speech_transcriptions]
-        #elif "Any" in str(type(response)):
-
+             # Handle possible different structures if using v1 vs v1p3beta1
+             if hasattr(response, "annotation_results"):
+                results = [x for x in response.annotation_results[0].speech_transcriptions]
+             else:
+                 # v1 structure might be in payload or similar? 
+                 # Actually v1 `AnnotateVideoResponse` has `annotation_results` too.
+                 results = [x for x in response.annotation_results[0].speech_transcriptions]
         else:
             results = response.results
+
+        strip_punctuation = re.compile('[^-a-zA-Z \']+')
+        
+        for result in results:
+            for i, alternative in enumerate(result.alternatives):
+                # We only take the first alternative usually
+                if i > 0: continue 
+                
+                for word_info in alternative.words:
+                     start = convert_to_seconds(word_info.start_time)
+                     end = convert_to_seconds(word_info.end_time)
+                     word_text = getattr(word_info, "word", "")
+                     confidence = getattr(word_info, "confidence", 0.0)
+                     
+                     words.append({
+                         "word": word_text,
+                         "start": start,
+                         "end": end,
+                         "confidence": confidence
+                     })
+        return words
+
+    def save_words_to_csv(self, words, path):
+        import csv
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=["start", "end", "word", "confidence"])
+            writer.writeheader()
+            for w in words:
+                writer.writerow(w)
+
+    def load_words_from_csv(self, path):
+        import csv
+        words = []
+        with open(path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+             words.append({
+                 "word": row["word"],
+                 "start": float(row["start"]),
+                 "end": float(row["end"]),
+                 "confidence": float(row.get("confidence", 0.0))
+             })
+        return words
+
+    def create_mute_list_from_words(self, words, subtitle_confirmed_words=None):
+        """Create mute list from transcribed words.
+        
+        Args:
+            words: List of word dicts with 'word', 'start', 'end' keys.
+            subtitle_confirmed_words: Optional set of words that appear in subtitles.
+                If a word is in subtitle_exceptions AND in this set, it won't be muted.
+        """
+        mute_list = []
+        mute_details = []  # (start, end, censored_word) for human-readable report
         transcript = []
         cleaned_transcript = []
-        # Word level stuff
-        # results[294].alternatives[0].words
-        # Alternatives (not word level):
-        # results[294].alternatives[1].transcript
-        for result in results:
-            for i,alternative in enumerate(result.alternatives):
-                previous_word = previous_start_time = ""
-                for word in alternative.words:
-                    _word = strip_punctuation.sub("", word.word).lower()
-                    compound_phrase = f"{previous_word} {_word}".strip()
-                    if compound_phrase in self.swears and previous_start_time:
-                        end = convert_to_seconds(word.end_time)
-                        mute_list.append((previous_start_time, end))
-                    elif _word in self.swears:
-                        start = convert_to_seconds(word.start_time)
-                        end = convert_to_seconds(word.end_time)
-                        mute_list.append((start, end))
-                        if i == 0:
-                            cleaned_transcript.append(word.word[0] + "*"*(len(_word)-1) )
-                    elif i == 0:
-                        cleaned_transcript.append(word.word)
+        
+        strip_punctuation = re.compile('[^-a-zA-Z \']+')
+        
+        previous_word = ""
+        previous_start_time = 0.0
+        
+        phrase_buffer = []
+        subtitle_confirmed_words = subtitle_confirmed_words or set()
 
-                    previous_word = _word
-                    previous_start_time = convert_to_seconds(word.start_time)
+        for i, word_obj in enumerate(words):
+            word_text = word_obj["word"]
+            start = word_obj["start"]
+            end = word_obj["end"]
+            
+            phrase_buffer.append(word_text)
+            
+            _word = strip_punctuation.sub("", word_text).lower()
+            compound_phrase = f"{previous_word} {_word}".strip()
+            
+            # Check if word is in subtitle exceptions and confirmed by subtitles
+            is_exception = _word in self.subtitle_exceptions and _word in subtitle_confirmed_words
+            
+            if compound_phrase in self.swears and previous_start_time:
+                # Mute the compound phrase (e.g., "god damn")
+                # Check if compound is exceptioned
+                compound_is_exception = (
+                    compound_phrase in self.subtitle_exceptions and 
+                    compound_phrase in subtitle_confirmed_words
+                )
+                if not compound_is_exception:
+                    mute_list.append((previous_start_time, end))
+                    mute_details.append((previous_start_time, end, compound_phrase[0] + '*' * (len(compound_phrase) - 1)))
+            elif _word in self.swears:
+                if is_exception:
+                    # Word is allowed because it's in subtitles
+                    cleaned_transcript.append(word_text)
+                else:
+                    censored = word_text[0] + "*"*(len(_word)-1)
+                    mute_list.append((start, end))
+                    mute_details.append((start, end, censored))
+                    cleaned_transcript.append(censored)
+            else:
+                cleaned_transcript.append(word_text)
 
-        phrase = result.alternatives[0].transcript
-        if phrase:
-            transcript.append(phrase)
+            previous_word = _word
+            previous_start_time = start
+            
+        transcript = [" ".join(phrase_buffer)]
         print(" ".join(cleaned_transcript))
-        return mute_list, transcript
+        return mute_list, transcript, mute_details
+
+    def create_mute_list_from_response(self, response):
+        # Legacy method kept for compatibility if needed, but refactored to use new pipeline
+        words = self.get_words_from_response(response)
+        return self.create_mute_list_from_words(words)
 
     def resume_operation(self, name):
         response = self.get_response(name=name)
@@ -335,10 +470,18 @@ class google_speech_api:
 
     def load_response(self, json_path):
         response_json = json.load(Path(json_path).open("r"))
-        if self.api == "speech":
-            response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
-        elif self.api == "video":
-            response = json_format.Parse(response_json, _video_intelligence.AnnotateVideoResponse()._pb)
+        
+        # Auto-detect type based on JSON content
+        # Video Intelligence has 'annotationResults'
+        # Speech has 'results' (or 'alternatives' nested strictly)
+        
+        # Note: json_format.Parse needs the correct target message.
+        
+        if "annotationResults" in response_json:
+             response = json_format.Parse(response_json, _video_intelligence.AnnotateVideoResponse()._pb)
+        else:
+             response = json_format.Parse(response_json, cloud_speech_pb2.LongRunningRecognizeResponse())
+
         return response
 
     def load_operation(self, json_path):
