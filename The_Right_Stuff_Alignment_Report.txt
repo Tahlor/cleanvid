@@ -1,8 +1,0 @@
-Alignment Report for The Right Stuff
-==============================
-
-Checking 693 subtitle lines against 2 transcribed words.
-MISSING PROFANITY: 'oh god' in subtitle 'Oh, God, look at this.' at 1091.524-1095.069
-Injected 1 words. Saved to d:\Github\cleanvid\data\google_api\The.Right.Stuff.1983.1080p.BluRay.x265-RARBG_words_aligned.csv
-
-Success! Aligned CSV saved to: d:\Github\cleanvid\data\google_api\The.Right.Stuff.1983.1080p.BluRay.x265-RARBG_words_aligned.csv
