@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.12"
       - name: Compile changed code
         working-directory: cleanvid
         run: python -m compileall -q scripts/align_subtitles.py scripts/subtitle_audit.py scripts/opensubtitles_provider.py scripts/pipeline.py scripts/run_pipeline.py utils.py google_api.py
