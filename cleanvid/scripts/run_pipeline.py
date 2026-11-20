@@ -53,9 +53,9 @@ Examples:
     parser.add_argument("--stop_after", type=int, choices=[1,2,3,4,5,6],
                         help="Stop after this step")
     parser.add_argument("--do_merge", action="store_true",
-                        help="Enable Step 4 (Merge Subtitles) - normally skipped")
-    parser.add_argument("--skip_merge", action="store_true", default=True,
-                        help="Skip Step 4 (default)")
+                        help="Explicitly cross-check subtitles and regenerate later steps")
+    parser.add_argument("--skip_merge", action="store_true", default=False,
+                        help="Skip subtitle cross-check even when available")
     
     # Mode
     parser.add_argument("--analyze", action="store_true",
@@ -78,16 +78,19 @@ Examples:
     if args.response_file:
         pipeline.context.response_path = Path(args.response_file)
         
-    # Apply merge control
-    if args.do_merge:
-        pipeline.steps[3].skip = False  # Step 4 is index 3
-    else:
-        pipeline.steps[3].skip = True
-        
-    # Apply force cascade
+    # Preserve saved lists by default; make an explicit review cascade.
+    if args.do_merge and args.skip_merge:
+        parser.error("--do_merge and --skip_merge are mutually exclusive")
     if args.force_step:
         pipeline.apply_force_cascade(args.force_step)
-        
+    if args.do_merge:
+        pipeline.apply_force_cascade(4)
+    elif args.skip_merge or not pipeline.context.subtitle_path:
+        pipeline.steps[3].skip = True
+    elif args.subtitle_file or (args.force_step and args.force_step <= 4):
+        pipeline.steps[3].skip = False
+    # An explicit step-6 rebuild must never regenerate saved mute timestamps.
+    
     # Apply stop
     if args.stop_after:
         pipeline.apply_stop_after(args.stop_after)
