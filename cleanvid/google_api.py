@@ -396,67 +396,42 @@ class google_speech_api:
         return words
 
     def create_mute_list_from_words(self, words, subtitle_confirmed_words=None):
-        """Create mute list from transcribed words.
-        
-        Args:
-            words: List of word dicts with 'word', 'start', 'end' keys.
-            subtitle_confirmed_words: Optional set of words that appear in subtitles.
-                If a word is in subtitle_exceptions AND in this set, it won't be muted.
+        """Generate a recall-oriented mute list from every configured occurrence.
+
+        Shared normalization with subtitle alignment ensures punctuation,
+        Unicode apostrophes, compounds, and multiword hits agree. A global
+        subtitle vocabulary cannot establish a per-occurrence exemption.
         """
-        mute_list = []
-        mute_details = []  # (start, end, censored_word) for human-readable report
-        transcript = []
-        cleaned_transcript = []
-        
-        strip_punctuation = re.compile('[^-a-zA-Z \']+')
-        
-        previous_word = ""
-        previous_start_time = 0.0
-        
-        phrase_buffer = []
-        subtitle_confirmed_words = subtitle_confirmed_words or set()
-
-        for i, word_obj in enumerate(words):
-            word_text = word_obj["word"]
-            start = word_obj["start"]
-            end = word_obj["end"]
-            
-            phrase_buffer.append(word_text)
-            
-            _word = strip_punctuation.sub("", word_text).lower()
-            compound_phrase = f"{previous_word} {_word}".strip()
-            
-            # Check if word is in subtitle exceptions and confirmed by subtitles
-            is_exception = _word in self.subtitle_exceptions and _word in subtitle_confirmed_words
-            
-            if compound_phrase in self.swears and previous_start_time:
-                # Mute the compound phrase (e.g., "god damn")
-                # Check if compound is exceptioned
-                compound_is_exception = (
-                    compound_phrase in self.subtitle_exceptions and 
-                    compound_phrase in subtitle_confirmed_words
-                )
-                if not compound_is_exception:
-                    mute_list.append((previous_start_time, end))
-                    mute_details.append((previous_start_time, end, compound_phrase[0] + '*' * (len(compound_phrase) - 1)))
-            elif _word in self.swears:
-                if is_exception:
-                    # Word is allowed because it's in subtitles
-                    cleaned_transcript.append(word_text)
-                else:
-                    censored = word_text[0] + "*"*(len(_word)-1)
-                    mute_list.append((start, end))
-                    mute_details.append((start, end, censored))
-                    cleaned_transcript.append(censored)
+        from scripts.align_subtitles import timed_tokens, make_lexicon, occurrences
+        if subtitle_confirmed_words:
+            import warnings
+            warnings.warn("Ignoring global subtitle exemptions; per-occurrence timing is required")
+        timed = timed_tokens(words)
+        seq = [token for token, _, _ in timed]
+        lexicon = make_lexicon(self.swears)
+        mute_details = []
+        for i, phrase in occurrences(seq, lexicon):
+            j = i+len(phrase)-1
+            # Reject matches spanning an unrelated pause. A synthetic
+            # subtitle-derived phrase uses a shared interval for its tokens.
+            if any(timed[k+1][1]-timed[k][2] > 1.0 for k in range(i,j)):
+                continue
+            start = max(0.0, timed[i][1])
+            end = max(timed[k][2] for k in range(i,j+1))
+            if end <= start:
+                end = start+0.2
+            word = " ".join(phrase)
+            mute_details.append((start, end, word[0]+"*"*(len(word)-1)))
+        # Overlapping hits are allowed (for example, a token plus its
+        # containing phrase); merge their windows for efficient encoding.
+        merged = []
+        for start, end, _ in sorted(mute_details):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
             else:
-                cleaned_transcript.append(word_text)
-
-            previous_word = _word
-            previous_start_time = start
-            
-        transcript = [" ".join(phrase_buffer)]
-        print(" ".join(cleaned_transcript))
-        return mute_list, transcript, mute_details
+                merged.append((start,end))
+        transcript = [" ".join(str(w["word"]) for w in words)]
+        return merged, transcript, sorted(set(mute_details))
 
     def create_mute_list_from_response(self, response):
         # Legacy method kept for compatibility if needed, but refactored to use new pipeline
