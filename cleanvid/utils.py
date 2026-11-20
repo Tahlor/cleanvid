@@ -365,74 +365,152 @@ def check_for_response_file(input_video_path, response_folder):
             return files[-1]
     return None
 
-def create_clean_video_command(input_path, output_path, mute_list=None, testing=False, ffmpeg_path="ffmpeg ",
-                               mute_list_file=None):
-    output_ext = Path(input_path).suffix
+def _clean_video_args(input_path, output_path, filter_text, ffmpeg_path, testing=False):
+    """Build an argv list (no shell quoting) and retain every non-clean stream."""
+    source = get_ffprobe_json(input_path)
+    if source.get("error") or not source.get("streams"):
+        raise ValueError(f"Invalid source: {input_path}")
+    audio = [s for s in source["streams"] if s["codec_type"] == "audio"]
+    if not audio:
+        raise ValueError("Input has no audio")
+    def title(s):
+        return s.get("tags", {}).get("title", "").casefold()
+    clean = [i for i, s in enumerate(audio) if "clean" in title(s) and "original" not in title(s)]
+    original = [i for i, s in enumerate(audio) if "original" in title(s)]
+    if len(original) == 1:
+        index = original[0]
+    elif len(audio) == 1 and not clean:
+        index = 0
+    elif len(audio) - len(clean) == 1:
+        index = next(i for i in range(len(audio)) if i not in clean)
+    else:
+        raise ValueError("Ambiguous original audio track; label the original before processing")
+    if index in clean:
+        raise ValueError("Original audio cannot also be a clean track")
+    # Historical mute scripts use [a:0] or [0:a:0] and [a]. Keep all
+    # saved intervals unchanged; only rebind their audio input and output.
+    match = re.fullmatch(r"\[(?:0:)?a:\d+\](.*?)\[a\]", filter_text.strip(), flags=re.S)
+    if not match:
+        raise ValueError("Unrecognized saved mute script")
+    body = match.group(1) or "anull"
+    normalized = f"[0:a:{index}]{body}[cleanvid_audio]"
+    # Source codecs such as DTS-HD are not suitable encoder choices. AC-3
+    # retains up to 5.1 channels; AAC is the portable fallback for other
+    # containers and channel counts.
+    suffix = Path(output_path).suffix.lower()
+    channels = int(audio[index].get("channels", 2))
+    codec = "ac3" if suffix in (".mkv", ".mp4", ".m4v") and 3 <= channels <= 6 else "aac"
+    bitrate = "448k" if codec == "ac3" else f"{min(768, max(128, 64*channels))}k"
+    if suffix not in (".mkv", ".mp4", ".m4v", ".mov", ".avi"):
+        raise ValueError(f"Unsupported output container {suffix}")
+    args = [str(ffmpeg_path).strip().strip('"'), "-nostdin", "-hide_banner", "-v", "error",
+            "-n", "-i", str(input_path), "-filter_complex", normalized, "-map", "0"]
+    for i in clean:
+        args += ["-map", f"-0:a:{i}"]
+    kept = [i for i in range(len(audio)) if i not in clean]
+    new_index = len(kept)
+    original_output = kept.index(index)
+    args += ["-map", "[cleanvid_audio]", "-map_metadata", "0", "-map_chapters", "0",
+             "-c", "copy", f"-c:a:{new_index}", codec, f"-b:a:{new_index}", bitrate,
+             f"-metadata:s:a:{original_output}", "title=English (Original)",
+             f"-metadata:s:a:{new_index}", "title=English (Clean)",
+             f"-metadata:s:a:{new_index}", "language=" + audio[index].get("tags", {}).get("language", "eng")]
+    for k, i in enumerate(kept):
+        # Preserve other disposition bits, but prevent another default.
+        disposition = audio[i].get("disposition", {})
+        flags = "+".join(key for key, value in disposition.items() if value and key != "default") or "0"
+        args += [f"-disposition:a:{k}", flags]
+    args += [f"-disposition:a:{new_index}", "default", "-max_muxing_queue_size", "9999"]
+    if testing:
+        args += ["-t", "60"]
+    args += [str(output_path)]
+    return args, source, index, clean
+
+
+def create_clean_video_command(input_path, output_path, mute_list=None, testing=False,
+                               ffmpeg_path="ffmpeg ", mute_list_file=None):
+    """Return a displayable command for legacy callers; execution uses argv."""
+    import shlex
+    output_path = Path(output_path)
     if mute_list_file is None:
-        mute_list_file = output_path.parent / (output_path.stem + "_MUTE.txt")
-        formatted_mute_list = format_mute_list(mute_list,mute_list_file)
-    testing = "-to 00:01:00" if testing else ""
+        mute_list_file = output_path.with_name(output_path.stem+"_MUTE.txt")
+        format_mute_list(mute_list, mute_list_file)
+    args, _, _, _ = _clean_video_args(input_path, output_path,
+        Path(mute_list_file).read_text(encoding="utf-8-sig"), ffmpeg_path, testing)
+    return (subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)), mute_list_file
 
-    ffprobe_json = get_ffprobe_json(input_path)
-    audio_format = get_audio_encoding_from_ffprobe_json(ffprobe_json)
-    try:
-        audio_bitrate = f"{int(get_audio_bitrate_from_ffprobe_json(ffprobe_json)) // 1000}k"
-    except:
-        audio_bitrate = "256k"
 
-    command = f"""{ffmpeg_path} -y -i "{input_path}" -map 0:v:0 -c:v copy  """ + \
-              f""" -filter_complex_script "{mute_list_file}"  {testing}""" + \
-              f""" -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -map "[a]" -c:a:0 {audio_format} -b:a:0 {audio_bitrate} -map 0:a -c:a:1 copy  """ + \
-              f"""-disposition:a:0 default -disposition:a:1 none -max_muxing_queue_size 9999""" + \
-              f""" "{str(Path(output_path).with_suffix(output_ext))}" """
-    # f""" -threads 4 """ + \
-
-    r"""
-    -y – A global option to overwrite the output file if it already exists.
-    -map 0:v – Designate the video stream(s) from the first input as a source for the output file.
-    -c:v copy – Stream copy the video. This just muxes the input to the output. No re-encoding occurs.
-    -map 0:a – Designate the audio stream(s) from the first input as a source for the output file.
-    -c:a copy – Stream copy the audio. This just muxes the input to the output. No re-encoding occurs.
-    -strict -2 -c:a aac – Use the native FFmpeg AAC audio encoder. -strict -2 is required as a way that you acknowledge that the encoder is designated as experimental. It is not a great encoder, but it is not too bad at higher bitrates.
-    -disposition:a:0 default first stream is default audio track
-    -c copy - copy only default streams
-    -map 0 - copy all streams
-
-    # CHANGE TO DEFAULT CLEAN AUDIO TRACK (sample)
-    ffmpeg -i "J:\Media\Videos\Movies\Unorganized\Apollo.13.1995.REMASTERED.1080p.BluRay.x265-RARBG\Apollo.13.1995_clean.mp4"  -ss 00:21:00 -to 00:21:20 -c copy -map 0 -metadata:s:a:0 title="Clean" -metadata:s:a:0 language=eng -metadata:s:a:1 title="Original" -disposition:a:0 default  "J:\Media\Videos\Movies\Unorganized\Apollo.13.1995.REMASTERED.1080p.BluRay.x265-RARBG\Apollo.13.1995_clean2.mp4"
-
-    """
-
-    # "ffmpeg -i video -c:v copy -af volume=0:enable='between(t,60,100)+between(t,330,370)+between(t,465,541.3)' out.mp4"
-
-    print(command)
-    return command, mute_list_file
-
-def create_clean_video(input_path,
-                       output_path,
-                       mute_list=None,
-                       testing=False,
-                       ffmpeg_path="ffmpeg ",
-                       del_mute_list_after=False,
-                       mute_list_file=None):
-
-    if mute_list is None and mute_list_file is None:
-        mute_list_file = check_for_mute_list(input_path)
-        if mute_list_file is None:
-            raise ValueError("No mute list provided")
+def create_clean_video(input_path, output_path, mute_list=None, testing=False,
+                       ffmpeg_path="ffmpeg ", del_mute_list_after=False, mute_list_file=None):
+    """Build and probe a sibling temporary file before publishing any output."""
+    import tempfile
+    input_path, output_path = Path(input_path), Path(output_path)
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("Use a separate output path; never overwrite an input directly")
+    if mute_list_file is None:
+        if mute_list is not None:
+            mute_list_file = output_path.with_name(output_path.stem+"_MUTE.txt")
+            format_mute_list(mute_list, mute_list_file)
         else:
-            warnings.warn("No mute list provided, using discovered mute list {}".format(mute_list_file))
-
-    command, mute_list_file = create_clean_video_command(input_path, output_path, mute_list, testing, ffmpeg_path,
-                                                         mute_list_file=mute_list_file)
-    ffmpegResult = delegator.run(command,
-                                 block=True)
-    if (ffmpegResult.return_code != 0) or (not os.path.isfile(output_path)):
-        print(ffmpegResult.err)
-        raise ValueError('Could not process %s' % (input_path))
-
+            mute_list_file = check_for_mute_list(input_path)
+    if mute_list_file is None:
+        raise ValueError("No mute list provided")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".cleanvid-", suffix=output_path.suffix, dir=output_path.parent)
+    os.close(fd)
+    tmp = Path(name)
+    tmp.unlink()  # ffmpeg -n requires an absent destination
+    normalized_script = None
+    try:
+        args, source, index, previous_clean = _clean_video_args(
+            input_path, tmp, Path(mute_list_file).read_text(encoding="utf-8-sig"), ffmpeg_path, testing)
+        # Windows has a bounded command line. For long filters use a
+        # temporary normalized script, never modify the saved mute list.
+        k = args.index("-filter_complex")
+        if len(subprocess.list2cmdline(args)) > 24000:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8",
+                                             dir=output_path.parent, delete=False) as f:
+                f.write(args[k+1])
+                normalized_script = Path(f.name)
+            args[k:k+2] = ["-filter_complex_script", str(normalized_script)]
+        subprocess.run(args, check=True)
+        if not file_exists(tmp):
+            raise ValueError("FFmpeg produced an empty or truncated file")
+        result = get_ffprobe_json(tmp)
+        source_streams = source["streams"]
+        output_streams = result.get("streams", [])
+        original_audio = [s for s in source_streams if s["codec_type"] == "audio"]
+        audio = [s for s in output_streams if s["codec_type"] == "audio"]
+        if len(audio) != len(original_audio)-len(previous_clean)+1:
+            raise ValueError("Unexpected audio stream count")
+        keep = [s for i,s in enumerate(original_audio) if i not in previous_clean]
+        if [s["codec_name"] for s in audio[:-1]] != [s["codec_name"] for s in keep]:
+            raise ValueError("Original audio codecs changed")
+        if audio[-1].get("tags", {}).get("title") != "English (Clean)" or not audio[-1].get("disposition", {}).get("default"):
+            raise ValueError("Clean track is not marked default")
+        if any(s.get("disposition", {}).get("default") for s in audio[:-1]):
+            raise ValueError("Multiple default audio tracks")
+        if audio[-1].get("channels") != original_audio[index].get("channels"):
+            raise ValueError("Clean audio channel count changed")
+        def nonaudio(streams):
+            return [(s["codec_type"], s.get("codec_name")) for s in streams if s["codec_type"] != "audio"]
+        if nonaudio(source_streams) != nonaudio(output_streams):
+            raise ValueError("A non-audio stream changed or disappeared")
+        expected = float(source["format"]["duration"])
+        if testing:
+            expected = min(expected, 60)
+        if abs(float(result["format"]["duration"])-expected) > 1:
+            raise ValueError("Output duration differs from input")
+        subprocess.run([str(ffmpeg_path).strip().strip('"'), "-nostdin", "-v", "error", "-xerror",
+                        "-i", str(tmp), "-map", f"0:a:{len(audio)-1}", "-f", "null", "-"], check=True)
+        os.replace(tmp, output_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+        if normalized_script and normalized_script.exists():
+            normalized_script.unlink()
     if del_mute_list_after:
-        os.remove(mute_list_file)
+        Path(mute_list_file).unlink()
 
 
 def get_length(filename, ffprobe_path=r"ffprobe"):
