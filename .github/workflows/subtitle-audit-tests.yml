@@ -1,0 +1,27 @@
+name: Subtitle audit regression tests
+on:
+  push:
+    paths:
+      - "cleanvid/**"
+      - ".github/workflows/subtitle-audit-tests.yml"
+  pull_request:
+    paths:
+      - "cleanvid/**"
+      - ".github/workflows/subtitle-audit-tests.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Compile changed code
+        working-directory: cleanvid
+        run: python -m compileall -q scripts/align_subtitles.py scripts/subtitle_audit.py scripts/opensubtitles_provider.py scripts/pipeline.py scripts/run_pipeline.py utils.py google_api.py
+      - name: Offline tests (no cloud account or media required)
+        working-directory: cleanvid
+        run: python -m unittest -v test_subtitle_crosscheck test_subtitle_audit
