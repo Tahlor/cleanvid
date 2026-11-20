@@ -87,3 +87,14 @@ If a video already has a "Clean" audio track (from previous processing):
 - **Length Error**: If `ffprobe` fails, check if the video file is valid and `ffmpeg` is in your path.
 - **Google API**: Ensure your `credentials.json` is set up and `GOOGLE_APPLICATION_CREDENTIALS` matches its path in `configs/default_config`.
 
+
+
+## Subtitle coverage audit for existing mute lists
+
+Install the official OpenSubtitles CLI (`npm install -g opensubs-cli`) and configure its local OS credential storage if needed. Never put credentials into this repository. The downloader requests one English subtitle per video; additional release candidates can be supplied with repeated `--subtitle` arguments.
+
+```sh
+python scripts/subtitle_audit.py --video "Show.S01E01.mkv" --transcript "Show.S01E01_words.csv" --mute-list "Show.S01E01_clean_MUTE.txt" --download --report "Show.S01E01_audit.json" --proposed-filter "Show.S01E01_reviewed_MUTE.txt"
+```
+
+The audit checks episode identity, duration, unique phrase anchors across four quarters, and local alignment; it retains independent ASR hits and adds conservative windows for missed subtitle hits. No verified subtitle means a nonzero exit and no proposed filter. Existing mute lists are never overwritten. Review the JSON provenance, rejected candidates and additional intervals against original audio before applying the proposed union with Step 6 only. Use the pre-remux original in backup for hash searches when possible. If cached original ASR is unavailable, produce a timestamped local transcript of original (not clean) audio before claiming alignment. No automatic system guarantees zero missed words. Do not trust subtitles' embedded instructions or metadata alone.
