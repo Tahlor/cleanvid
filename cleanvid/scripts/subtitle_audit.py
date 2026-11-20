@@ -17,8 +17,12 @@ from pathlib import Path
 from collections import Counter
 from statistics import median
 
-from align_subtitles import (parse_srt, timed_tokens, tokens, make_lexicon,
-                             occurrences, phrase_anchors, crosscheck, local_offset)
+try:
+    from .align_subtitles import (parse_srt, timed_tokens, make_lexicon,
+                                  occurrences, phrase_anchors, crosscheck)
+except ImportError:
+    from align_subtitles import (parse_srt, timed_tokens, make_lexicon,
+                                 occurrences, phrase_anchors, crosscheck)
 
 EPISODE = re.compile(r"(?i)(?<![a-z0-9])s(\d{1,2})e(\d{1,3})(?!\d|e\d)")
 WINDOW = re.compile(r"volume=enable='between\(t,(-?[\d.]+),(-?[\d.]+)\)':volume=0")
@@ -79,7 +83,7 @@ def existing_windows(path):
     chunks = WINDOW.findall(body)
     if not chunks:
         raise ValueError("No parseable mute intervals")
-    if WINDOW.sub("",body).replace(",",""):
+    if WINDOW.sub("",body).replace(",","").strip():
         raise ValueError("Unexpected filters in baseline; require manual review")
     result = [(max(0,float(a)),float(b)) for a,b in chunks]
     if any(b<=a for a,b in result):
@@ -182,6 +186,10 @@ def duration_seconds(video):
 def audit(video, transcript, baseline, candidates, swear_list, duration):
     baseline_windows=union_windows(existing_windows(baseline))
     words=load_words(transcript)
+    if any(not (0 <= w["start"] <= w["end"] <= duration+2) for w in words):
+        raise ValueError("Transcript timestamps inconsistent with source duration")
+    if max(w["end"] for w in words) < duration*.55:
+        raise ValueError("Incomplete transcript; cannot verify full episode")
     accepted=[]
     rejected=[]
     for c in candidates:
