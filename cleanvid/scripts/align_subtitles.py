@@ -146,11 +146,23 @@ def crosscheck(words, subs, swear_list):
     lexicon = make_lexicon(swear_list)
     flagged = [(cue, list(occurrences(tokens(cue["text"]), lexicon))) for cue in subs]
     flagged = [(cue, hits) for cue, hits in flagged if hits]
-    if not flagged:
-        return []
     anchors = phrase_anchors(words, subs)
     if len(anchors) < 3:
-        raise ValueError("Profanity exists in subtitles but synchronization is unverified")
+        raise ValueError("Subtitle synchronization is unverified")
+    # A wrong episode with matching opening credits must not pass the audit.
+    if len(subs) >= 30:
+        span = subs[-1]["end"]-subs[0]["start"]
+        tolerance = min(180, 0.25*span)
+        if (len(anchors) < 5 or anchors[0][0]-subs[0]["start"] > tolerance
+                or subs[-1]["end"]-anchors[-1][0] > tolerance
+                or anchors[-1][0]-anchors[0][0] < 0.5*span):
+            raise ValueError("Insufficient episode-wide subtitle alignment")
+    masked = re.compile(r"(?<!\w)(?:[a-z]*\*{2,}[a-z]*|[a-z]+\*+[a-z]+)(?!\w)", re.I)
+    for cue in subs:
+        if masked.search(re.sub(r"<[^>]*>", "", cue["text"])):
+            raise ValueError(f"Potentially masked profanity at {cue['start']:.2f}s; review the uncensored subtitle or audio")
+    if not flagged:
+        return []
     speech = timed_tokens(words)
     seq = [w[0] for w in speech]
     # Only exact ASR lexicon hits are evidence of coverage. An arbitrary
@@ -158,7 +170,9 @@ def crosscheck(words, subs, swear_list):
     detected = defaultdict(list)
     for i, phrase in occurrences(seq, lexicon):
         j = i+len(phrase)-1
-        if speech[j][2]-speech[i][1] <= max(2.0, 1.0*len(phrase)):
+        if (speech[j][2]-speech[i][1] <= max(2.0, 1.0*len(phrase))
+                and speech[j][2] > speech[i][1]
+                and all(speech[k+1][1]-speech[k][2] <= 1.0 for k in range(i,j))):
             detected[phrase].append((i, j, speech[i][1], speech[j][2]))
     used = set()
     additions = []
