@@ -236,16 +236,50 @@ def main():
     p.add_argument("--subtitle",action="append",default=[],type=Path)
     p.add_argument("--download",action="store_true",
                    help="Use official OpenSubs CLI if no local candidate exists")
+    p.add_argument("--parent-imdb",help="IMDb ID of the series (e.g. tt11280740)")
+    p.add_argument("--max-downloads",type=int,choices=(1,2,3),default=3)
+    p.add_argument("--candidate-cache",type=Path,help="Separate cache for provider candidates")
+    p.add_argument("--prompt-login",action="store_true",help="With OPENSUBTITLES_API_KEY, prompt for login using hidden password input")
     p.add_argument("--report",required=True,type=Path)
     p.add_argument("--proposed-filter",type=Path)
     args=p.parse_args()
-    candidates=args.subtitle or discover_local(args.video)
-    if not candidates and args.download:
-        candidates=download_subtitle(args.video)
+    candidates=list(args.subtitle or discover_local(args.video))
     swear_path=Path(__file__).resolve().parent.parent/"swears.txt"
     swears=[line.split("|",1)[0].strip() for line in swear_path.read_text(encoding="utf-8-sig").splitlines()
             if line.strip() and not line.lstrip().startswith("#")]
-    report=audit(args.video,args.transcript,args.mute_list,candidates,swears,duration_seconds(args.video))
+    duration=duration_seconds(args.video)
+    provider_events=[]
+    report=audit(args.video,args.transcript,args.mute_list,candidates,swears,duration)
+    if args.download and not report["subtitle_verified"]:
+        try:
+            if os.environ.get("OPENSUBTITLES_API_KEY"):
+                try:
+                    from .opensubtitles_provider import OpenSubtitles
+                except ImportError:
+                    from opensubtitles_provider import OpenSubtitles
+                provider=OpenSubtitles(prompt=args.prompt_login)
+                title,season,episode=episode_identity(args.video)
+                results=provider.search(args.video,title,season,episode,moviehash(args.video),args.parent_imdb)
+                location=args.candidate_cache or args.report.parent/"subtitle_candidates"
+                for candidate in results[:args.max_downloads]:
+                    downloaded=provider.download(candidate,location,args.video)
+                    if downloaded not in candidates:
+                        candidates.append(downloaded)
+                    provider_events.append(dict(file_id=candidate["file_id"],release=candidate["release"],
+                                                hash_match=candidate["hash_match"],path=str(downloaded)))
+                    report=audit(args.video,args.transcript,args.mute_list,candidates,swears,duration)
+                    if report["subtitle_verified"]:
+                        break
+            elif not candidates:
+                candidates=download_subtitle(args.video)
+                report=audit(args.video,args.transcript,args.mute_list,candidates,swears,duration)
+            else:
+                provider_events.append(dict(status="Existing subtitle rejected; configure REST API key for bounded alternate release search or supply another candidate."))
+        except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as exc:
+            # Never write exception text that may contain a signed URL, token
+            # or request details. Provider error types remain useful.
+            provider_events.append(dict(status="Provider acquisition failed",error_type=type(exc).__name__))
+    report["provider_events"]=provider_events
     atomic_text(args.report,json.dumps(report,indent=2))
     print(f"Subtitle candidates accepted: {len(report['accepted'])}; rejected: {len(report['rejected'])}; "
           f"candidate additions: {len(report['candidate_additions'])}")
