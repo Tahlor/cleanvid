@@ -195,6 +195,11 @@ class Pipeline:
         
         # Clean video
         self.context.clean_video_path = v.parent / f"{v.stem}_clean{v.suffix}"
+        # Automatically cross-check new mute lists when a matching subtitle
+        # is available. Existing lists are preserved unless explicitly rerun.
+        self.steps[3].skip = not self.context.subtitle_path or self._check_mute_list_exists()
+        if not self.context.subtitle_path:
+            print("Warning: no matching subtitle file; profanity has not been cross-checked against subtitles.")
         
         # Audio track analysis
         self._analyze_audio_tracks()
@@ -238,27 +243,20 @@ class Pipeline:
         return None
         
     def _find_subtitle_file(self) -> tuple[Optional[Path], float]:
-        """Find matching subtitle file near video."""
+        """Only auto-select an explicitly matching English or unlabelled SRT.
+        
+        Fuzzy names in a season directory can associate the wrong episode.
+        A differently named file must be supplied as an explicit override.
+        """
         v = self.context.video_path
-        
-        # Strict check
-        for ext in [".srt.bak", ".srt"]:
-            check = v.with_suffix(ext)
-            if check.exists():
-                return check, 1.0
-        
-        # Loose check
-        candidates = list(v.parent.glob("*.bak")) + list(v.parent.glob("*.srt"))
-        best_score = 0.0
-        best_cand = None
-        
-        for c in candidates:
-            ratio = difflib.SequenceMatcher(None, v.stem, c.stem).ratio()
-            if ratio > best_score:
-                best_score = ratio
-                best_cand = c
-                
-        return best_cand, best_score
+        preferred = [v.stem + suffix for suffix in
+                     (".en.srt", ".eng.srt", ".en-US.srt", ".english.srt",
+                      ".srt", ".srt.bak")]
+        nearby = {p.name.casefold(): p for p in v.parent.iterdir() if p.is_file()}
+        for name in preferred:
+            if name.casefold() in nearby:
+                return nearby[name.casefold()], 1.0
+        return None, 0.0
         
     def _find_latest_csv(self, base_path: Path) -> Path:
         """Find the latest version of the CSV file."""
@@ -343,14 +341,49 @@ class Pipeline:
     def _check_transcribed(self) -> bool:
         return self.context.response_path and self.context.response_path.exists()
         
+    def _merge_receipt_path(self):
+        return self.context.response_folder / (self.context.video_path.stem + "_subtitle_audit.json")
+
+    def _merge_signature(self):
+        import hashlib
+        return {
+            "subtitle_sha256": hashlib.sha256(self.context.subtitle_path.read_bytes()).hexdigest(),
+            "transcript_sha256": hashlib.sha256(self.context.csv_path.read_bytes()).hexdigest(),
+            "algorithm": "local-phrase-v1"
+        }
+
     def _check_merged(self) -> bool:
-        return self.context.csv_path and self.context.csv_path.exists()
+        import json
+        try:
+            return json.loads(self._merge_receipt_path().read_text(encoding="utf-8")) == self._merge_signature()
+        except (OSError, AttributeError, ValueError):
+            return False
         
     def _check_mute_list_exists(self) -> bool:
-        return self.context.mute_list_path and self.context.mute_list_path.exists()
+        try:
+            content = self.context.mute_list_path.read_text(encoding="utf-8-sig").strip()
+            return content.startswith(("[a:", "[0:a:")) and content.endswith("[a]")
+        except (OSError, AttributeError):
+            return False
         
     def _check_clean_video_exists(self) -> bool:
-        return self.context.clean_video_path and self.context.clean_video_path.exists()
+        try:
+            if not self.context.clean_video_path or not utils.file_exists(self.context.clean_video_path):
+                return False
+            data = utils.get_ffprobe_json(self.context.clean_video_path)
+            audio = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
+            def title(s):
+                tags = s.get("tags", {})
+                return (tags.get("title") or tags.get("handler_name") or "").casefold()
+            clean = [s for s in audio if "clean" in title(s) and "original" not in title(s)]
+            original = [s for s in audio if "original" in title(s)]
+            return (not data.get("error") and len(clean) == len(original) == 1
+                    and bool(clean[0].get("disposition", {}).get("default"))
+                    and not original[0].get("disposition", {}).get("default")
+                    and any(s.get("codec_type") == "video" for s in data["streams"])
+                    and float(data.get("format", {}).get("duration", 0)) > 0)
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
     
     # --- Execution ---
     
@@ -481,70 +514,36 @@ class Pipeline:
             raise RuntimeError("Transcription completed but no response file was saved.")
         
     def _execute_merge(self):
-        print(f"  Merging subtitles...")
+        """Cross-check the cached transcription without discarding user edits."""
+        import json
+        import tempfile
         from scripts import align_subtitles
-        
         if not self.context.subtitle_path:
-            raise ValueError("No subtitle file found for merge.")
-            
-        # Load words from response
-        api = self._get_speech_api()
-        if not self.context.response_path:
-             raise ValueError("No response file found. Transcribe step may have failed or was skipped.")
-        response_obj = api.load_response(self.context.response_path)
-        words = api.get_words_from_response(response_obj)
-        
-        # Save base CSV
-        base_csv = self.context.response_folder / f"{self.context.video_path.stem}_words_base.csv"
-        api.save_words_to_csv(words, base_csv)
-        
-        # Align
-        # align_subtitles opens base_csv and writes to aligned_csv
-        aligned_csv = align_subtitles.inject_subtitles_into_words(
-            str(base_csv),
-            str(self.context.subtitle_path)
-        )
-        
-        if aligned_csv:
-            # Move to final location
-            target = self.context.csv_path
-            
-            # Retry logic for moving file
-            import time
-            max_retries = 3
-            for i in range(max_retries):
-                try:
-                    if target.exists():
-                        target.unlink() # Explicitly remove target first
-                    Path(aligned_csv).replace(target)
-                    break
-                except (PermissionError, OSError) as e:
-                    if i == max_retries - 1:
-                        print(f"  Warning: Could not write to {target} ({e}). Creating new version...")
-                        
-                        # Determine new version
-                        stem = target.stem
-                        parent = target.parent
-                        suffix = target.suffix
-                        
-                        if "_v" in stem and stem.rsplit("_v", 1)[1].isdigit():
-                            base, v_str = stem.rsplit("_v", 1)
-                            new_v = int(v_str) + 1
-                            new_name = f"{base}_v{new_v}{suffix}"
-                        else:
-                            new_name = f"{stem}_v2{suffix}"
-                            
-                        new_target = parent / new_name
-                        print(f"  New target: {new_target}")
-                        
-                        Path(aligned_csv).replace(new_target)
-                        
-                        # CRITICAL: Update context so next steps use the new file
-                        self.context.csv_path = new_target
-                    else:
-                        print(f"  File access error, retrying ({i+1}/{max_retries})...")
-                        time.sleep(1.0)
-            
+            raise ValueError("No matching subtitle file; supply the correct English SRT.")
+        if not self.context.csv_path or not self.context.csv_path.exists():
+            if not self.context.response_path:
+                raise ValueError("No cached transcript or response found.")
+            api = self._get_speech_api()
+            words = api.get_words_from_response(api.load_response(self.context.response_path))
+            self.context.csv_path = self.context.response_folder / f"{self.context.video_path.stem}_words.csv"
+            self.context.csv_path.parent.mkdir(parents=True, exist_ok=True)
+            api.save_words_to_csv(words, self.context.csv_path)
+        base = self.context.response_folder / f"{self.context.video_path.stem}_words.csv"
+        # Preserve original and manually edited CSVs; publish next available version.
+        version = 2
+        while base.with_name(f"{base.stem}_v{version}.csv").exists():
+            version += 1
+        dest = base.with_name(f"{base.stem}_v{version}.csv")
+        result = align_subtitles.inject_subtitles_into_words(
+            self.context.csv_path, self.context.subtitle_path, output_path=dest)
+        if result:
+            self.context.csv_path = Path(result)
+        receipt = self._merge_receipt_path()
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=receipt.parent, delete=False) as f:
+            json.dump(self._merge_signature(), f)
+            temp = Path(f.name)
+        temp.replace(receipt)
+
     def _execute_generate_mute_list(self):
         print(f"  Generating mute list...")
         api = self._get_speech_api()
