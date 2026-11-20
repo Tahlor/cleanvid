@@ -316,7 +316,7 @@ def create_mute_list(time_list):
     for timePair in time_list:
         lineStart = timePair[0]
         lineEnd = timePair[1]
-        muteTimeList.append("volume=enable='between(t," + format(lineStart-.1, '.3f') + "," + format(lineEnd+.1, '.3f') + ")':volume=0")
+        muteTimeList.append("volume=enable='between(t," + format(max(0, lineStart-.1), '.3f') + "," + format(lineEnd+.1, '.3f') + ")':volume=0")
     return muteTimeList
 
 
@@ -374,7 +374,8 @@ def _clean_video_args(input_path, output_path, filter_text, ffmpeg_path, testing
     if not audio:
         raise ValueError("Input has no audio")
     def title(s):
-        return s.get("tags", {}).get("title", "").casefold()
+        tags = s.get("tags", {})
+        return (tags.get("title") or tags.get("handler_name") or "").casefold()
     clean = [i for i, s in enumerate(audio) if "clean" in title(s) and "original" not in title(s)]
     original = [i for i, s in enumerate(audio) if "original" in title(s)]
     if len(original) == 1:
@@ -415,6 +416,9 @@ def _clean_video_args(input_path, output_path, filter_text, ffmpeg_path, testing
              f"-metadata:s:a:{original_output}", "title=English (Original)",
              f"-metadata:s:a:{new_index}", "title=English (Clean)",
              f"-metadata:s:a:{new_index}", "language=" + audio[index].get("tags", {}).get("language", "eng")]
+    if suffix in (".mp4", ".m4v", ".mov"):
+        args += [f"-metadata:s:a:{original_output}", "handler_name=English (Original)",
+                 f"-metadata:s:a:{new_index}", "handler_name=English (Clean)"]
     for k, i in enumerate(kept):
         # Preserve other disposition bits, but prevent another default.
         disposition = audio[i].get("disposition", {})
@@ -473,7 +477,7 @@ def create_clean_video(input_path, output_path, mute_list=None, testing=False,
                 f.write(args[k+1])
                 normalized_script = Path(f.name)
             args[k:k+2] = ["-filter_complex_script", str(normalized_script)]
-        subprocess.run(args, check=True)
+        subprocess.run(args, check=True, timeout=max(120, 2*float(source["format"]["duration"])))
         if not file_exists(tmp):
             raise ValueError("FFmpeg produced an empty or truncated file")
         result = get_ffprobe_json(tmp)
@@ -486,7 +490,8 @@ def create_clean_video(input_path, output_path, mute_list=None, testing=False,
         keep = [s for i,s in enumerate(original_audio) if i not in previous_clean]
         if [s["codec_name"] for s in audio[:-1]] != [s["codec_name"] for s in keep]:
             raise ValueError("Original audio codecs changed")
-        if audio[-1].get("tags", {}).get("title") != "English (Clean)" or not audio[-1].get("disposition", {}).get("default"):
+        tags = audio[-1].get("tags", {})
+        if (tags.get("title") or tags.get("handler_name")) != "English (Clean)" or not audio[-1].get("disposition", {}).get("default"):
             raise ValueError("Clean track is not marked default")
         if any(s.get("disposition", {}).get("default") for s in audio[:-1]):
             raise ValueError("Multiple default audio tracks")
@@ -503,6 +508,33 @@ def create_clean_video(input_path, output_path, mute_list=None, testing=False,
             raise ValueError("Output duration differs from input")
         subprocess.run([str(ffmpeg_path).strip().strip('"'), "-nostdin", "-v", "error", "-xerror",
                         "-i", str(tmp), "-map", f"0:a:{len(audio)-1}", "-f", "null", "-"], check=True)
+        if not testing:
+            def chapter_times(data):
+                return [(float(c["start_time"]), float(c["end_time"])) for c in data.get("chapters", [])]
+            original_chapters, rendered_chapters = chapter_times(source), chapter_times(result)
+            if len(original_chapters) != len(rendered_chapters) or any(
+                abs(a-c)>0.1 or abs(b-d)>0.1
+                for (a,b),(c,d) in zip(original_chapters,rendered_chapters)
+            ):
+                raise ValueError("Output chapter boundaries differ")
+        # Verify actual silence at the center of each saved mute interval.
+        # Stream labels alone are not evidence that filtering was applied.
+        script = Path(mute_list_file).read_text(encoding="utf-8-sig")
+        for a,b in re.findall(r"between\(t,\s*(-?[\d.]+),\s*(-?[\d.]+)\)", script):
+            a,b = max(0,float(a)),min(expected,float(b))
+            if b <= a:
+                continue
+            center = a+(b-a)*0.4
+            duration = (b-a)*0.2
+            if duration < 0.03:
+                raise ValueError(f"Mute interval too short to validate at {center:.3f}s")
+            sample = subprocess.run([str(ffmpeg_path).strip().strip('"'), "-nostdin", "-hide_banner",
+                "-ss", f"{center:.3f}", "-i", str(tmp), "-t", f"{duration:.3f}",
+                "-map", f"0:a:{len(audio)-1}", "-af", "volumedetect", "-f", "null", "-"],
+                capture_output=True, text=True, check=True)
+            maximum = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", sample.stderr)
+            if not maximum or float(maximum.group(1)) > -45:
+                raise ValueError(f"Mute did not verify at {center:.3f}s")
         os.replace(tmp, output_path)
     finally:
         if tmp.exists():
@@ -532,7 +564,7 @@ def get_length(filename, ffprobe_path=r"ffprobe"):
     return float(valid_float)
 
 def get_ffprobe_json(filename, ffprobe_path=r"ffprobe"):
-    command = [str(ffprobe_path), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_error",
+    command = [str(ffprobe_path), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_error",
                str(filename)]
     print(" ".join(command))
     result = subprocess.run(command,
